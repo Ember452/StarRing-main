@@ -1,0 +1,3 @@
+﻿recursive-include starring/config/static *.txt *.yaml
+recursive-include starring/agents/skills *.md
+recursive-include starring/agents/skills/buildin/mysql-reporter/scripts *.py
