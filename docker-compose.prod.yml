@@ -1,4 +1,4 @@
-﻿x-api-worker-env: &api-worker-env
+x-api-worker-env: &api-worker-env
   HOST_IP: ${HOST_IP:-}
   LITE_MODE: ${LITE_MODE:-}
   RUNNING_IN_DOCKER: "true"
@@ -150,8 +150,6 @@ services:
     container_name: web-prod
     ports:
       - "80:80"
-    depends_on:
-      - api
     networks:
       - app-network
     environment:
