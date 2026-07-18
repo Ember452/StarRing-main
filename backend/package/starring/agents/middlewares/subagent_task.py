@@ -1,13 +1,22 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
-from deepagents import SubagentTransformer
-from deepagents.middleware._utils import append_to_system_message
+try:
+    from deepagents import SubagentTransformer
+except ImportError:
+    SubagentTransformer = None  # type: ignore[assignment,misc]
+
+try:
+    from deepagents.middleware._utils import append_to_system_message
+except ImportError:
+    append_to_system_message = None  # type: ignore[assignment]
 from langchain.agents.middleware.types import AgentMiddleware, ContextT, ModelRequest, ModelResponse, ResponseT
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -15,6 +24,10 @@ from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
 from starring.agents.context import build_agent_input_context
+from starring.agents.middlewares.subagent_deliverable import (
+    EMPTY_DELIVERABLE,
+    SubAgentDeliverable,
+)
 from starring.repositories.agent_repository import SUB_AGENT_BACKEND_ID, AgentRepository
 from starring.repositories.agent_run_repository import AgentRunRepository
 from starring.repositories.user_repository import UserRepository
@@ -26,12 +39,20 @@ from starring.utils.subagent_thread_utils import make_child_thread_id
 _CHILD_STATE_INHERIT_KEYS: frozenset[str] = frozenset()
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
 
+# 子智能体结构化输出的 fenced code block 正则
+# 用专属标识 "subagent-result" 避免误匹配其他代码块（如 python/json）
+_SUBAGENT_RESULT_PATTERN = re.compile(
+    r"```subagent-result\s*\n(.*?)\n```",
+    re.DOTALL,
+)
+
 TASK_SYSTEM_PROMPT = """## `task`（子智能体任务工具）
 
 你可以使用 `task` 工具把复杂、独立的子任务交给已配置的子智能体处理。子智能体只返回最终结果，你看不到它的中间步骤。
 工具结果会包含子智能体线程 ID，后续需要继续同一个子任务时，把该 ID 作为 `thread_id` 传回 `task`。
 
-使用原则：
+### 使用原则
+
 - 任务足够复杂、可以独立完成、或需要隔离上下文时使用。
 - 多个互不依赖的子任务可以并行调用多个 `task`。
 - 继续既有子智能体任务时传入之前结果中的 `thread_id`；新任务不要填写 `thread_id`。
@@ -40,7 +61,49 @@ TASK_SYSTEM_PROMPT = """## `task`（子智能体任务工具）
 - 调用时必须选择下方可用的 `subagent_type`，并在 `description` 中写清目标、上下文和期望输出。
 - 不要通过 shell、curl、HTTP API 或命令行间接调用子智能体；需要子智能体时必须使用 `task` 工具。
 
-Available subagent types:
+### Orchestrator-Worker 编排约束
+
+作为 Orchestrator（编排者），你调用 task 工具时必须遵循以下四条约束：
+
+1. **Decompose by aspect, not by step**（按正交维度拆，非按步骤拆）
+   - 正确：多源研究 → 「查内部知识库」「查外部网络」「查数据库」并行
+   - 错误：「先查 X，再查 Y，最后查 Z」串行（用单次 task 调用 + description 内说明即可，不要拆 3 个 task）
+
+2. **Bound depth**（限制嵌套深度）
+   - 子智能体不能再调用 task 工具（系统已强制保证），你不要试图在 description 中指示子智能体再委派
+
+3. **Explicit deliverables**（显式声明期望产物）
+   - 每次 task 调用的 description 中必须包含 `Expected deliverable:` 字段，说明期望子智能体返回的内容结构
+   - 示例：`Expected deliverable: structured result with summary, key_findings (3-5 items), sources (with file_id), confidence`
+
+4. **Synthesis is reasoning, not concatenation**（合成是推理，不是拼接）
+   - 拿到多个子智能体的结果后，不要简单拼接摘要
+   - 要评估各子结果的 confidence、找冲突、综合判断、产出统一答案
+   - 如果两个子结果冲突，明确指出冲突并说明你的判断
+
+### Effort-scaling 分配规则
+
+根据任务复杂度分配子智能体数量，避免过度并行（token 成本失控）或不足并行（效率低下）：
+
+- **简单任务**（单点查询、单一事实）：1 个子智能体，或不调 task 直接用本地工具
+- **中等复杂度**（多步推理、单领域分析）：2-4 个并行子智能体
+- **复杂研究任务**（多源综合、跨领域对比）：5-10 个并行子智能体
+- **超复杂任务**（10+ 子任务）：先评估是否真有必要，优先考虑拆为多轮对话
+
+### 子智能体返回格式
+
+子智能体会以结构化 markdown 返回结果，包含以下字段：
+
+- **摘要**：1-3 句话概括结果
+- **关键发现**：列表
+- **引用来源**：file_id / chunk_id / snippet
+- **置信度**：0-1
+- **产物文件**：沙盒路径
+- **原始文本**：兜底完整内容
+
+合成最终回答时，**优先参考摘要和关键发现**，必要时打开产物文件或引用来源验证细节。
+
+### Available subagent types
 
 {available_agents}"""
 
@@ -50,6 +113,7 @@ Available subagent types:
 {available_agents}
 
 Use `subagent_type` to select one available subagent and put the full task brief in `description`.
+The `description` MUST include an `Expected deliverable:` field declaring what the subagent should return.
 Omit `thread_id` for a new task. To continue a previous subagent task, pass the child thread ID returned by
 that prior task result as `thread_id`.
 Do not call subagents through shell, curl, HTTP APIs, or command-line indirection."""
@@ -88,6 +152,116 @@ def _tool_result_with_thread_id(child_thread_id: str, content: str) -> str:
     return f"> 子智能体线程 ID: {child_thread_id}\n\n---\n\n{content}"
 
 
+def _truncate_raw_text(text: str, max_chars: int = 5000) -> str:
+    """截断超长 raw_text，避免 state 体积膨胀。
+
+    兜底路径（无 fenced block 或解析失败）的 raw_text 截断到 5KB；
+    fenced block 内 LLM 显式声明的 raw_text 字段不截断（LLM 已主动控制长度）。
+    """
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...[truncated]"
+
+
+def _parse_deliverable(messages: list, artifacts_from_state: list[str]) -> SubAgentDeliverable:
+    """从子智能体所有 AIMessage 中解析结构化 deliverable。
+
+    扫描策略：不再只看 _final_assistant_text（最后一个非空 AIMessage.text），
+    而是扫描所有 AIMessage.text，拼接后查找 fenced block。
+    原因：子智能体可能在 fenced block 后继续输出 AIMessage 解释
+    （如"我已完成结构化输出"），最后一个 AIMessage 不是 fenced block。
+
+    解析策略（三层兜底，永远不抛异常）：
+    1. 拼接所有 AIMessage.text（倒序优先，最近的最相关）
+    2. 优先匹配 ```subagent-result``` fenced block 中的 JSON
+    3. JSON 解析失败 → raw_text 保留原文，summary 取首段
+    4. Pydantic 校验失败 → 同上兜底
+    5. 完全无输出 → EMPTY_DELIVERABLE
+    artifacts_from_state 始终保留（来自子智能体 state.artifacts）。
+    """
+    all_text = "\n\n".join(
+        msg.text for msg in reversed(messages) if isinstance(msg, AIMessage) and msg.text
+    )
+
+    if not all_text:
+        return EMPTY_DELIVERABLE.model_copy(update={"artifacts": artifacts_from_state})
+
+    match = _SUBAGENT_RESULT_PATTERN.search(all_text)
+    if not match:
+        return SubAgentDeliverable(
+            summary="",  # validator 会从 raw_text 取首段
+            raw_text=_truncate_raw_text(all_text),
+            artifacts=artifacts_from_state,
+        )
+
+    json_str = match.group(1).strip()
+    try:
+        payload = json.loads(json_str)
+    except json.JSONDecodeError:
+        return SubAgentDeliverable(
+            summary="",
+            raw_text=_truncate_raw_text(all_text),
+            artifacts=artifacts_from_state,
+        )
+
+    # 合并 artifacts：fenced block 中的优先，state.artifacts 补充
+    merged_artifacts = list(dict.fromkeys(
+        list(payload.get("artifacts") or []) + artifacts_from_state
+    ))
+    payload["artifacts"] = merged_artifacts
+
+    try:
+        return SubAgentDeliverable.model_validate(payload)
+    except Exception:
+        return SubAgentDeliverable(
+            summary="",
+            raw_text=_truncate_raw_text(all_text),
+            artifacts=artifacts_from_state,
+        )
+
+
+def _deliverable_to_markdown(
+    deliverable: SubAgentDeliverable, child_thread_id: str, subagent_type: str
+) -> str:
+    """把结构化 deliverable 渲染为 LLM 友好的 markdown。
+
+    不渲染 raw_text：避免 ToolMessage 体积膨胀，符合 Orchestrator-Worker 减少 token 的目标。
+    raw_text 保留在 deliverable.raw_text 状态字段中，供前端/Langfuse 查看；
+    父 LLM 如需原文细节，通过 open_kb_document / find_kb_document 工具主动调取。
+    """
+    lines = [
+        f"> 子智能体线程 ID: {child_thread_id}",
+        f"> 子智能体类型: {subagent_type}",
+        f"> 置信度: {deliverable.confidence:.2f}",
+        "",
+        "## 摘要",
+        deliverable.summary,
+        "",
+    ]
+    if deliverable.key_findings:
+        lines.append("## 关键发现")
+        lines.extend(f"- {finding}" for finding in deliverable.key_findings)
+        lines.append("")
+    if deliverable.sources:
+        lines.append("## 引用来源")
+        for src in deliverable.sources:
+            snippet_preview = src.snippet[:200] + ("..." if len(src.snippet) > 200 else "")
+            if src.type == "kb_chunk":
+                lines.append(f"- [知识库] file_id={src.file_id}, chunk_id={src.chunk_id}: {snippet_preview}")
+            elif src.type == "file":
+                lines.append(f"- [文件] {src.file_id}: {snippet_preview}")
+            elif src.type == "url":
+                lines.append(f"- [URL] {src.url}: {snippet_preview}")
+            else:
+                lines.append(f"- [其他] {snippet_preview}")
+        lines.append("")
+    if deliverable.artifacts:
+        lines.append("## 产物文件")
+        lines.extend(f"- {path}" for path in deliverable.artifacts)
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _new_child_thread_id(
     requested_thread_id: str | None,
     *,
@@ -112,21 +286,36 @@ def _with_run_payload(subagent_run: dict[str, Any], run) -> dict[str, Any]:
     return {**subagent_run, **_agent_run_state_payload(run)}
 
 
-def _completed_tool_response(result: dict[str, Any], tool_call_id: str, subagent_run: dict[str, Any]) -> Command:
-    final_text = _final_assistant_text(result.get("messages") or [])
-    artifacts = _result_artifacts(result)
+def _completed_tool_response(
+    result: dict[str, Any], tool_call_id: str, subagent_run: dict[str, Any]
+) -> Command:
+    # 不再调用 _final_assistant_text，改为直接传 messages 给 _parse_deliverable
+    # _final_assistant_text 仍保留（向后兼容其他调用点）
+    messages = result.get("messages") or []
+    artifacts_from_state = _result_artifacts(result)
+
+    deliverable = _parse_deliverable(messages, artifacts_from_state)
+
     subagent_run = {
         **subagent_run,
         "status": "completed",
         "completed_at": utc_isoformat(),
-        "result_preview": _preview_text(final_text),
+        "result_preview": _preview_text(deliverable.summary),
         "error": None,
-        "artifacts": artifacts,
+        "artifacts": deliverable.artifacts,
+        "deliverable": deliverable.model_dump(mode="json"),  # 含 raw_text 供前端/Langfuse 查看
     }
-    tool_result = _tool_result_with_thread_id(subagent_run["child_thread_id"], final_text)
+    tool_result = _tool_result_with_thread_id(
+        subagent_run["child_thread_id"],
+        _deliverable_to_markdown(
+            deliverable,
+            subagent_run["child_thread_id"],
+            subagent_run.get("subagent_type", ""),
+        ),
+    )
     update: dict[str, Any] = {"messages": [ToolMessage(tool_result, tool_call_id=tool_call_id)]}
-    if artifacts:
-        update["artifacts"] = artifacts
+    if deliverable.artifacts:
+        update["artifacts"] = deliverable.artifacts
     update["subagent_runs"] = [subagent_run]
     return Command(update=update)
 
@@ -169,6 +358,12 @@ def _agent_run_state_payload(run) -> dict[str, Any]:
 def _failed_tool_response(error: Exception, tool_call_id: str, subagent_run: dict[str, Any]) -> Command:
     error_text = str(error)
     message = f"子智能体 {subagent_run['subagent_type']} 调用失败：{error_text}"
+    # summary 与 result_preview 分离：summary 是 deliverable 简洁描述，result_preview 保留完整错误
+    failed_deliverable = SubAgentDeliverable(
+        summary="子智能体调用失败",
+        confidence=0.0,
+        raw_text=message,  # 完整错误信息保留在 raw_text
+    )
     tool_result = _tool_result_with_thread_id(subagent_run["child_thread_id"], message)
     update = {
         "messages": [ToolMessage(tool_result, tool_call_id=tool_call_id)],
@@ -180,6 +375,7 @@ def _failed_tool_response(error: Exception, tool_call_id: str, subagent_run: dic
                 "result_preview": _preview_text(message),
                 "error": error_text,
                 "artifacts": [],
+                "deliverable": failed_deliverable.model_dump(mode="json"),
             }
         ],
     }
@@ -260,7 +456,11 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         self.system_prompt = TASK_SYSTEM_PROMPT.format(available_agents=available_agents)
         self.tools = [self._build_task_tool(available_agents)]
         self.subagent_names = frozenset(self.subagents)
-        self.transformers = [lambda scope: SubagentTransformer(scope, subagent_names=self.subagent_names)]
+        self.transformers = (
+            [lambda scope: SubagentTransformer(scope, subagent_names=self.subagent_names)]
+            if SubagentTransformer is not None
+            else []
+        )
 
     async def _create_subagent_run(
         self,
@@ -426,6 +626,7 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
             child_context.run_id = run.id
             child_context.request_id = run.request_id
             child_context.is_subagent_runtime = True
+            child_context.output_format = "structured"
 
             try:
                 graph = await backend.get_graph(context=child_context)
@@ -475,13 +676,18 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
             infer_schema=True,
         )
 
+    def _append_system_prompt(self, system_message: str) -> str:
+        if append_to_system_message is not None:
+            return append_to_system_message(system_message, self.system_prompt)
+        return f"{system_message}\n\n{self.system_prompt}" if system_message else self.system_prompt
+
     def wrap_model_call(
         self,
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
     ) -> ModelResponse[ResponseT]:
         return handler(
-            request.override(system_message=append_to_system_message(request.system_message, self.system_prompt))
+            request.override(system_message=self._append_system_prompt(request.system_message))
         )
 
     async def awrap_model_call(
@@ -490,7 +696,7 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
     ) -> ModelResponse[ResponseT]:
         return await handler(
-            request.override(system_message=append_to_system_message(request.system_message, self.system_prompt))
+            request.override(system_message=self._append_system_prompt(request.system_message))
         )
 
 

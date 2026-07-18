@@ -1,4 +1,5 @@
-﻿from dataclasses import dataclass, field
+from dataclasses import dataclass, field
+from typing import Literal
 
 from starring.agents.context import BaseContext
 
@@ -20,4 +21,8 @@ class SubAgentContext(BaseContext):
     is_subagent_runtime: bool = field(
         default=False,
         metadata={"name": "子智能体运行态", "configurable": False, "hide": True},
+    )
+    output_format: Literal["natural", "structured"] = field(
+        default="natural",
+        metadata={"name": "输出格式", "configurable": False, "hide": True},
     )
