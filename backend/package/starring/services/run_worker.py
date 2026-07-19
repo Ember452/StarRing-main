@@ -1,4 +1,18 @@
-"""ARQ worker for agent runs."""
+"""ARQ worker：异步执行 AgentRun 的核心循环。
+
+本模块是 StarRing 异步对话链路的「消费者」端，由 ``arq worker`` 进程加载：
+- ``process_agent_run``: 主入口，消费 chat / resume run，把 LangGraph 流式输出
+  转换为事件写入 Redis Stream，并维护 run 状态机（running → completed/failed/interrupted/cancelled）
+- ``execute_trigger_run``: 触发器执行入口，由 cron_scan 元任务 enqueue 触发
+- ``WorkerSettings``: ARQ worker 配置（functions / max_tries / job_timeout / cron_jobs）
+
+关键设计：
+1. **协作式取消**：通过 ``RunContext`` 监听 Redis pub/sub 取消信号，在每次 chunk 间隙检查，
+   不暴力 kill 任务，保证状态机干净终结
+2. **ChunkedEventWriter**：攒批写 Redis Stream，避免 LLM token 流频繁 I/O
+3. **可重试错误分类**：``RetryableRunError`` / ``NonRetryableRunError`` 区分瞬态与永久错误，
+   ``OperationalError`` / ``ConnectionError`` 等自动归为可重试
+"""
 
 from __future__ import annotations
 
@@ -32,15 +46,20 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 
 class RetryableRunError(Exception):
-    """Error type that should trigger ARQ retry."""
+    """可重试错误：触发 ARQ 重新投递任务（受 ``WorkerSettings.max_tries`` 限制）。"""
 
 
 class NonRetryableRunError(Exception):
-    """Error type that should not trigger ARQ retry."""
+    """不可重试错误：直接标记 run 失败，不进入 ARQ 重试队列。"""
 
 
 @dataclass
 class RunContext:
+    """单个 run 的执行上下文，封装取消信号监听任务。
+
+    ``start()`` 创建后台 watch task 订阅 Redis 取消通道；``is_cancelled()``
+    被 ``process_agent_run`` 在每次 chunk 间隙调用，实现协作式取消。
+    """
     run_id: str
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     _watch_task: asyncio.Task | None = None
@@ -300,7 +319,21 @@ async def _consume_stream_with_cancel(agen, run_ctx: RunContext):
 
 
 async def process_agent_run(ctx, run_id: str):
-    """消费任务"""
+    """ARQ 主入口：消费单个 AgentRun，把 LangGraph 流式输出转换为 Redis Stream 事件。
+
+    流程：
+    1. 加载 run + user，校验状态（已终结则跳过）
+    2. 标记 running，启动 ``RunContext`` 监听取消信号
+    3. 根据 ``run_type`` 选择 ``stream_agent_chat`` 或 ``stream_agent_resume``
+    4. 消费 LangGraph 流：loading chunk 攒批写入，状态 chunk 同步更新 run 状态
+    5. 终结时标记 completed / failed / interrupted / cancelled，写入 end 事件
+
+    异常处理：
+    - ``CancelledError``: 标记 cancelled，写入 interrupt 事件
+    - 可重试异常：未达 max_tries 则抛 ``RetryableRunError`` 触发 ARQ 重投；
+      达到 max_tries 则标记 failed
+    - 不可重试异常：直接标记 failed
+    """
     run = await _get_run(run_id)
     if not run:
         logger.warning(f"Run not found: {run_id}")
@@ -569,6 +602,15 @@ async def execute_trigger_run(ctx: dict, trigger_id: str, scheduled_time_iso: st
 
 
 class WorkerSettings:
+    """ARQ worker 配置入口，由 ``arq worker`` 进程读取。
+
+    - ``functions``: 注册两类任务 - ``process_agent_run``（主对话 run）与
+      ``execute_trigger_run``（触发器执行）
+    - ``max_tries``: 单任务最大重试次数（含首次执行）
+    - ``job_timeout``: 单任务最大执行时长（秒），超时由 ARQ 强制 cancel
+    - ``cron_jobs``: 注册 ``scan_triggers`` 元任务，每分钟第 0 秒执行一次
+    - ``on_startup`` / ``on_shutdown``: 生命周期钩子，初始化与释放 PG 连接
+    """
     functions = [process_agent_run, execute_trigger_run]
     max_tries = 2
     retry_jobs = True

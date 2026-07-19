@@ -1,4 +1,19 @@
-﻿"""Run queue/redis helpers."""
+"""AgentRun 异步执行队列的 Redis 基础设施。
+
+本模块是 StarRing 异步对话链路的底层支撑，封装两类 Redis 能力：
+
+1. **取消信号**：通过 ``run:cancel:{run_id}`` 键 + ``run:cancel:ch`` pub/sub 通道
+   实现跨进程取消。HTTP 层调用 ``publish_cancel_signal``，worker 端通过
+   ``wait_for_cancel_signal`` 监听并协作式取消正在执行的 run。
+
+2. **事件流**：通过 Redis Stream ``run:events:{run_id}`` 持久化 run 执行期间
+   产生的所有事件（metadata / messages / interrupt / error / end），
+   前端通过 ``list_run_stream_events`` 按 ``after_seq`` 游标增量拉取，
+   实现 SSE 流式响应 + 断线重连。
+
+依赖 arq + redis.asyncio；连接句柄全局缓存（``_redis_client`` / ``_arq_pool``），
+通过 ``close_queue_clients`` 在应用 shutdown 时统一释放。
+"""
 
 from __future__ import annotations
 
@@ -82,6 +97,10 @@ def _payload_thread_id(payload: dict | None) -> str | None:
 
 
 async def get_redis_client():
+    """获取全局缓存的 redis.asyncio 客户端（首次调用时建立连接并 ping 校验）。
+
+    连接失败时关闭句柄并抛 RuntimeError，由调用方决定是否重试。
+    """
     global _redis_client
     if _redis_client is not None:
         return _redis_client
@@ -106,6 +125,11 @@ async def get_redis_client():
 
 
 async def get_arq_pool():
+    """获取全局缓存的 ARQ 连接池（用于 enqueue_job 投递异步任务）。
+
+    与 ``get_redis_client`` 分离：ARQ 用自己的 ``RedisSettings`` 创建池，
+    内部走 hiredis 协议，与 ``redis.asyncio`` 客户端不共用连接。
+    """
     global _arq_pool
     if _arq_pool is not None:
         return _arq_pool
@@ -135,6 +159,12 @@ async def redis_pubsub(channel: str):
 
 
 async def publish_cancel_signal(run_id: str) -> None:
+    """发布取消信号：写入带 TTL 的 key + publish 到取消通道。
+
+    双通道设计：worker 端 ``wait_for_cancel_signal`` 同时监听 pub/sub 与 key，
+    任意一条通道失效（如 worker 重连）都能感知到取消，避免信号丢失。
+    TTL 默认 30 分钟，超过窗口的取消信号自动失效，防止僵尸 run 被反复唤醒。
+    """
     redis = await get_redis_client()
     key = _cancel_key(run_id)
     try:
@@ -145,6 +175,7 @@ async def publish_cancel_signal(run_id: str) -> None:
 
 
 async def has_cancel_signal(run_id: str) -> bool:
+    """检查 run 是否已被取消（读 ``run:cancel:{run_id}`` key）。"""
     redis = await get_redis_client()
     key = _cancel_key(run_id)
     try:
@@ -155,6 +186,11 @@ async def has_cancel_signal(run_id: str) -> bool:
 
 
 async def wait_for_cancel_signal(run_id: str, poll_timeout_seconds: float = 1.0) -> bool:
+    """阻塞等待 run 的取消信号，超时返回 False。
+
+    优先检查 key（处理 worker 重连后的延迟信号），随后订阅 pub/sub 通道。
+    ``poll_timeout_seconds`` 控制单次 pub/sub 轮询超时，外层调用方可定期 re-check。
+    """
     if await has_cancel_signal(run_id):
         return True
 
@@ -177,6 +213,7 @@ async def wait_for_cancel_signal(run_id: str, poll_timeout_seconds: float = 1.0)
 
 
 async def clear_cancel_signal(run_id: str) -> None:
+    """run 终结后清理取消信号 key，避免下次同名 run 误判为已取消。"""
     redis = await get_redis_client()
     key = _cancel_key(run_id)
     try:
@@ -186,7 +223,12 @@ async def clear_cancel_signal(run_id: str) -> None:
 
 
 async def append_run_stream_event(run_id: str, event_type: str, payload: dict, *, thread_id: str | None = None) -> str:
-    """时间写入RedisStream"""
+    """把单个事件写入 Redis Stream ``run:events:{run_id}``，返回 stream entry id。
+
+    envelope 包含 schema_version / run_id / thread_id / event / payload / created_at，
+    保证前端按统一 schema 解析；stream TTL 默认 2 小时，超长 stream 由
+    ``RUN_EVENTS_STREAM_MAXLEN`` 控制容量（0 表示不裁剪）。
+    """
     redis = await get_redis_client() # await把当前协程挂起，并等待他完成结果
     key = _event_stream_key(run_id)
     now = datetime.now(tz=UTC)
@@ -221,6 +263,11 @@ async def list_run_stream_events(
     after_seq: str = "0-0",
     limit: int = 200,
 ) -> list[dict]:
+    """从 Redis Stream 增量拉取事件，供前端 SSE 断线重连。
+
+    ``after_seq`` 是上一次拉取返回的最大 entry id；首次传 "0-0" 拉取全量。
+    使用 ``xrange(min="({after_seq}")`` 开区间查询，避免重复返回边界事件。
+    """
     redis = await get_redis_client()
     key = _event_stream_key(run_id)
     start = "-" if after_seq in {"0-0", ""} else f"({after_seq}"
@@ -258,6 +305,7 @@ async def list_run_stream_events(
 
 
 async def get_last_run_stream_seq(run_id: str) -> str:
+    """获取 run 事件流的最新 entry id（用于前端建立 SSE 连接时的初始游标）。"""
     redis = await get_redis_client()
     key = _event_stream_key(run_id)
     rows = await redis.xrevrange(key, max="+", min="-", count=1)
@@ -268,6 +316,7 @@ async def get_last_run_stream_seq(run_id: str) -> str:
 
 
 async def close_queue_clients() -> None:
+    """应用 shutdown 时释放 Redis / ARQ 全局连接句柄。"""
     global _redis_client, _arq_pool
     if _arq_pool is not None:
         try:
