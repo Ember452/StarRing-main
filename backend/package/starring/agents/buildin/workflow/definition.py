@@ -88,6 +88,28 @@ class WorkflowDefinition(BaseModel):
         if len(self.nodes) > 50:
             raise ValueError(f"工作流节点数超过上限 50，当前 {len(self.nodes)}")
 
+        # 边数限制（防止定义过大）
+        if len(self.edges) > 100:
+            raise ValueError(f"工作流边数超过上限 100，当前 {len(self.edges)}")
+
+        # 校验 condition 节点的 cases[i].then 与 default 必须指向已存在节点
+        for node in self.nodes:
+            if node.node_type == "condition":
+                cases = node.config.get("cases", [])
+                for case in cases:
+                    then_branch = case.get("then")
+                    if then_branch is not None and then_branch not in node_ids:
+                        raise ValueError(
+                            f"condition 节点 {node.id} 的 case.then={then_branch!r} "
+                            f"指向不存在的节点"
+                        )
+                default_branch = node.config.get("default")
+                if default_branch is not None and default_branch not in node_ids:
+                    raise ValueError(
+                        f"condition 节点 {node.id} 的 default={default_branch!r} "
+                        f"指向不存在的节点"
+                    )
+
         # 简单环路检测：DFS 检测是否存在环（不含 start/end 的环）
         self._check_no_cycles()
 

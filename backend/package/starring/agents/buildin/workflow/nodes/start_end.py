@@ -49,17 +49,13 @@ async def execute_start_end(
     if kind == "end":
         # 合成所有节点 summary 为最终响应
         node_outputs = state.get("node_outputs", {})
-        # 按节点执行顺序拼接（取除 start/end 外的节点 summary）
+        # 拼接所有上游节点 summary（按节点 ID 顺序，排除自身）
         summaries = []
         for nid, deliverable in node_outputs.items():
             if nid == node.id:
                 continue
-            try:
-                upstream_node = context  # 占位，后续可扩展节点元信息
-                if deliverable.summary.strip():
-                    summaries.append(f"[节点 {nid}]: {deliverable.summary}")
-            except Exception:
-                continue
+            if deliverable.summary.strip():
+                summaries.append(f"[节点 {nid}]: {deliverable.summary}")
 
         if summaries:
             final_text = "\n\n".join(summaries)

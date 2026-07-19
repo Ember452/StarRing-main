@@ -61,6 +61,26 @@ def _validate_definition(definition_dict: dict) -> WorkflowDefinition:
         ) from exc
 
 
+def _build_validation_response(definition_dict: dict) -> dict:
+    """校验工作流定义并构造校验结果响应（不抛异常，返回 valid/error 字段）。
+
+    用于 ``POST /workflows/validate`` 与 ``POST /workflows/{id}/validate``
+    两个端点共享校验与响应构造逻辑。
+    """
+    try:
+        definition = WorkflowDefinition.model_validate(definition_dict)
+        return {
+            "valid": True,
+            "node_count": len(definition.nodes),
+            "edge_count": len(definition.edges),
+            "start_node_id": definition.get_start_node_id(),
+            "end_node_id": definition.get_end_node_id(),
+            "version": definition.version,
+        }
+    except Exception as exc:
+        return {"valid": False, "error": str(exc)}
+
+
 # ---------------------------------------------------------------------------
 # CRUD endpoints
 # ---------------------------------------------------------------------------
@@ -97,7 +117,7 @@ async def create_workflow(
     return workflow.to_dict()
 
 
-@workflow_router.get("", response_model=list[dict])
+@workflow_router.get("", response_model=dict)
 async def list_workflows(
     is_active: bool | None = Query(None, description="按启用状态过滤"),
     offset: int = Query(0, ge=0),
@@ -110,7 +130,19 @@ async def list_workflows(
     workflows = await repo.list_for_user(
         uid=str(user.uid), is_active=is_active, offset=offset, limit=limit
     )
-    return [w.to_dict() for w in workflows]
+    return {"workflows": [w.to_dict() for w in workflows]}
+
+
+@workflow_router.post("/validate", response_model=dict)
+async def validate_definition(
+    payload: dict,
+    user: User = Depends(get_required_user),
+):
+    """校验工作流定义合法性（不执行，不需要先保存）。
+
+    用于前端编辑器实时校验：POST body 为工作流定义 JSON。
+    """
+    return _build_validation_response(payload)
 
 
 @workflow_router.get("/{workflow_id}", response_model=dict)
@@ -187,15 +219,4 @@ async def validate_workflow(
     if workflow is None:
         raise HTTPException(status_code=404, detail="工作流不存在或无权访问")
 
-    try:
-        definition = WorkflowDefinition.model_validate(workflow.definition)
-        return {
-            "valid": True,
-            "node_count": len(definition.nodes),
-            "edge_count": len(definition.edges),
-            "start_node_id": definition.get_start_node_id(),
-            "end_node_id": definition.get_end_node_id(),
-            "version": definition.version,
-        }
-    except Exception as exc:
-        return {"valid": False, "error": str(exc)}
+    return _build_validation_response(workflow.definition)

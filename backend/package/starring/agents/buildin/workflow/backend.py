@@ -73,12 +73,14 @@ class WorkflowBackend(BaseAgent):
         """从 context 加载工作流定义。
 
         优先用 context 中已缓存的 definition；否则按 workflow_id 查库。
+        workflow_id 支持两种形式：
+        - slug（推荐，由 agent_runtime_service 注入 agents.slug）
+        - UUID（用户显式配置 workflows.id）
         """
-        # Phase 1 简化：context.workflow_id 必须由调用方提供
-        # 后续接入 workflow_router 后从数据库加载
         if not context.workflow_id:
             raise ValueError(
-                "WorkflowBackend 缺少 workflow_id，请通过 context.workflow_id 指定要执行的工作流"
+                "WorkflowBackend 缺少 workflow_id，请通过 context.workflow_id 指定要执行的工作流 "
+                "（值为 workflows.slug 或 workflows.id）"
             )
 
         # 从数据库加载（延迟导入避免循环依赖）
@@ -87,9 +89,15 @@ class WorkflowBackend(BaseAgent):
 
         async with pg_manager.get_async_session_context() as db:
             repo = WorkflowRepository(db)
-            workflow = await repo.get(context.workflow_id)
+            # 先按 slug 查（最常见路径，由 agent_runtime_service 注入 agents.slug）
+            workflow = await repo.get_by_slug(context.workflow_id)
             if workflow is None:
-                raise ValueError(f"工作流 {context.workflow_id} 不存在")
+                # fallback：按 UUID 查（用户显式配置 workflows.id 的场景）
+                workflow = await repo.get(context.workflow_id)
+            if workflow is None:
+                raise ValueError(
+                    f"工作流 {context.workflow_id!r} 不存在（已按 slug 与 id 两次查询）"
+                )
             if not workflow.is_active:
                 raise ValueError(f"工作流 {context.workflow_id} 已停用")
 
@@ -137,10 +145,17 @@ class WorkflowBackend(BaseAgent):
             if source_node.node_type == "condition":
                 # condition 节点：通过 Command(goto=...) 实现跳转，注册直接边
                 # LangGraph 会根据 Command.goto 跳转，无需显式 conditional_edges
+                # 必须把所有可能的目标节点都注册为直接边
                 for edge in edges:
                     builder.add_edge(source_id, edge.target)
             else:
-                # 普通节点：注册直接边（同源多边时取第一条）
+                # 普通节点：只允许有一条出边（多出边是配置错误，fail-fast）
+                if len(edges) > 1:
+                    raise ValueError(
+                        f"节点 {source_id}（类型 {source_node.node_type}）"
+                        f"有 {len(edges)} 条出边，普通节点只允许 1 条出边；"
+                        f"如需多路分支请使用 condition 节点"
+                    )
                 if edges:
                     builder.add_edge(source_id, edges[0].target)
 

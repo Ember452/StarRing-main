@@ -40,17 +40,16 @@ async def execute_application_call(
     if input_template:
         user_input = f"{input_template}\n\n{user_input}"
 
-    # 从 agent_manager 查找目标 agent
-    target_agent = None
-    for agent_id in agent_manager._classes:
-        if agent_id == target_slug or target_slug in agent_id:
-            target_agent = agent_manager.get_agent(agent_id)
-            break
-
-    if target_agent is None:
+    # 从 agent_manager 查找目标 agent（按类名精确匹配）
+    # 注意：target_agent_slug 实际是 agent 类名（如 "ChatbotAgent" / "SupervisorAgent"），
+    # 由 auto_discover_agents 注册到 agent_manager._classes（键为 __class__.__name__）
+    if target_slug not in agent_manager._classes:
+        available = list(agent_manager._classes.keys())
         raise ValueError(
-            f"application-call 节点 {node.id} 的目标 agent slug={target_slug!r} 未注册"
+            f"application-call 节点 {node.id} 的目标 agent={target_slug!r} 未注册，"
+            f"可用 agent: {available}"
         )
+    target_agent = agent_manager.get_agent(target_slug)
 
     # 调用目标 agent（同步执行：ainvoke 单次输入）
     # 注意：嵌套深度限制 = 1，目标 agent 不能再触发工作流（由 WorkflowBackend.get_graph 检查）

@@ -132,6 +132,56 @@ def test_too_many_nodes_rejected():
         WorkflowDefinition(nodes=nodes, edges=[])
 
 
+def test_too_many_edges_rejected():
+    """边数超过上限 100 应抛错。"""
+    nodes = [
+        Node(id="start", node_type="start-end", config={"kind": "start"}),
+        Node(id="end", node_type="start-end", config={"kind": "end"}),
+    ]
+    # 构造 101 条边（全部从 start 到 end）
+    edges = [Edge(source="start", target="end") for _ in range(101)]
+    with pytest.raises(ValueError, match="边数超过上限"):
+        WorkflowDefinition(nodes=nodes, edges=edges)
+
+
+def test_condition_cases_then_invalid_target_rejected():
+    """condition 节点的 cases[i].then 指向不存在的节点应抛错。"""
+    with pytest.raises(ValueError, match="case.then.*指向不存在的节点"):
+        WorkflowDefinition(
+            nodes=[
+                Node(id="start", node_type="start-end", config={"kind": "start"}),
+                Node(id="cond", node_type="condition", config={
+                    "cases": [{"when": "true", "then": "nonexistent"}],
+                    "default": "end",
+                }),
+                Node(id="end", node_type="start-end", config={"kind": "end"}),
+            ],
+            edges=[
+                Edge(source="start", target="cond"),
+                Edge(source="cond", target="end"),
+            ],
+        )
+
+
+def test_condition_default_invalid_target_rejected():
+    """condition 节点的 default 指向不存在的节点应抛错。"""
+    with pytest.raises(ValueError, match="default.*指向不存在的节点"):
+        WorkflowDefinition(
+            nodes=[
+                Node(id="start", node_type="start-end", config={"kind": "start"}),
+                Node(id="cond", node_type="condition", config={
+                    "cases": [{"when": "true", "then": "end"}],
+                    "default": "nonexistent",
+                }),
+                Node(id="end", node_type="start-end", config={"kind": "end"}),
+            ],
+            edges=[
+                Edge(source="start", target="cond"),
+                Edge(source="cond", target="end"),
+            ],
+        )
+
+
 def test_cycle_rejected():
     """环路应抛错。"""
     with pytest.raises(ValueError, match="存在环路"):

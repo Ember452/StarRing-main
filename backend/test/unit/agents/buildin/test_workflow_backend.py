@@ -165,7 +165,7 @@ async def test_get_graph_raises_when_no_workflow_id():
 
 @pytest.mark.asyncio
 async def test_get_graph_loads_definition_from_db():
-    """get_graph 应从数据库加载工作流定义并编译为 graph。"""
+    """get_graph 应通过 slug 从数据库加载工作流定义并编译为 graph。"""
     backend = WorkflowBackend()
     ctx = WorkflowContext(workflow_id="test-wf-id")
 
@@ -175,7 +175,9 @@ async def test_get_graph_loads_definition_from_db():
     fake_workflow.definition = _make_linear_definition().model_dump()
 
     fake_repo = MagicMock()
-    fake_repo.get = AsyncMock(return_value=fake_workflow)
+    # slug 路径命中（get_by_slug 返回 workflow，get 不会被调用）
+    fake_repo.get_by_slug = AsyncMock(return_value=fake_workflow)
+    fake_repo.get = AsyncMock(return_value=None)
 
     fake_db = MagicMock()
     fake_db.__aenter__ = AsyncMock(return_value=fake_db)
@@ -195,15 +197,54 @@ async def test_get_graph_loads_definition_from_db():
 
     assert graph is not None
     assert ctx.workflow_version == 1
+    # 确认走的是 slug 路径
+    fake_repo.get_by_slug.assert_awaited_once_with("test-wf-id")
+    fake_repo.get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_graph_falls_back_to_uuid_when_slug_not_found():
+    """slug 查不到时应回退到 UUID 查找。"""
+    backend = WorkflowBackend()
+    ctx = WorkflowContext(workflow_id="some-uuid-string")
+
+    fake_workflow = MagicMock()
+    fake_workflow.is_active = True
+    fake_workflow.version = 2
+    fake_workflow.definition = _make_linear_definition().model_dump()
+
+    fake_repo = MagicMock()
+    fake_repo.get_by_slug = AsyncMock(return_value=None)
+    fake_repo.get = AsyncMock(return_value=fake_workflow)
+
+    fake_db = MagicMock()
+
+    with (
+        patch(
+            "starring.storage.postgres.manager.pg_manager.get_async_session_context",
+            return_value=MagicMock(__aenter__=AsyncMock(return_value=fake_db), __aexit__=AsyncMock(return_value=None)),
+        ),
+        patch(
+            "starring.repositories.workflow_repository.WorkflowRepository",
+            return_value=fake_repo,
+        ),
+    ):
+        graph = await backend.get_graph(context=ctx)
+
+    assert graph is not None
+    assert ctx.workflow_version == 2
+    fake_repo.get_by_slug.assert_awaited_once_with("some-uuid-string")
+    fake_repo.get.assert_awaited_once_with("some-uuid-string")
 
 
 @pytest.mark.asyncio
 async def test_get_graph_raises_when_workflow_not_found():
-    """工作流不存在时 get_graph 应抛 ValueError。"""
+    """工作流不存在时（slug 与 UUID 都查不到）get_graph 应抛 ValueError。"""
     backend = WorkflowBackend()
     ctx = WorkflowContext(workflow_id="nonexistent-wf")
 
     fake_repo = MagicMock()
+    fake_repo.get_by_slug = AsyncMock(return_value=None)
     fake_repo.get = AsyncMock(return_value=None)
 
     fake_db = MagicMock()
@@ -233,7 +274,7 @@ async def test_get_graph_raises_when_workflow_inactive():
     fake_workflow.version = 1
 
     fake_repo = MagicMock()
-    fake_repo.get = AsyncMock(return_value=fake_workflow)
+    fake_repo.get_by_slug = AsyncMock(return_value=fake_workflow)
 
     fake_db = MagicMock()
 
@@ -249,3 +290,30 @@ async def test_get_graph_raises_when_workflow_inactive():
     ):
         with pytest.raises(ValueError, match="已停用"):
             await backend.get_graph(context=ctx)
+
+
+# ---------------------------------------------------------------------------
+# _build_state_graph fail-fast 校验
+# ---------------------------------------------------------------------------
+
+
+def test_build_state_graph_normal_node_multi_edges_raises():
+    """普通节点（非 condition）有多条出边时应 fail-fast。"""
+    backend = WorkflowBackend()
+    ctx = WorkflowContext(workflow_id="test-wf")
+    # llm-1 节点有 2 条出边（重复 target，无环，但多出边）
+    definition = WorkflowDefinition(
+        nodes=[
+            Node(id="start", node_type="start-end", config={"kind": "start"}),
+            Node(id="llm-1", node_type="llm", config={"system_prompt": "x"}),
+            Node(id="end", node_type="start-end", config={"kind": "end"}),
+        ],
+        edges=[
+            Edge(source="start", target="llm-1"),
+            Edge(source="llm-1", target="end"),
+            Edge(source="llm-1", target="end"),  # 多出边（同 target 重复），非法
+        ],
+    )
+
+    with pytest.raises(ValueError, match="普通节点只允许 1 条出边"):
+        backend._build_state_graph(definition, ctx)
