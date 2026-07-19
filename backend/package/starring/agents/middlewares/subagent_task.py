@@ -1,3 +1,14 @@
+"""子智能体 task 工具中间件（Orchestrator-Worker 模式核心）。
+
+实现父智能体通过 ``task`` 工具委派子任务给子智能体的完整链路：
+- 在父智能体 system prompt 中注入 ``TASK_SYSTEM_PROMPT``（task 工具使用规范）
+- 注册 ``task`` StructuredTool，父智能体调用时创建子 AgentRun 并 enqueue 执行
+- 子 run 终结后从其消息流解析结构化 ``SubAgentDeliverable``，渲染为 markdown 回传父 ToolMessage
+- 复用 / 失败 / 取消等场景统一通过 ``Command`` 返回结构化 ToolMessage
+
+核心数据契约：``SubAgentDeliverable``（见 ``subagent_deliverable.py``）。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -295,6 +306,12 @@ def _with_run_payload(subagent_run: dict[str, Any], run) -> dict[str, Any]:
 def _completed_tool_response(
     result: dict[str, Any], tool_call_id: str, subagent_run: dict[str, Any]
 ) -> Command:
+    """子 run 成功终结时构造父侧 ToolMessage 响应。
+
+    流程：从 result.messages 解析 ``SubAgentDeliverable`` → 渲染为 markdown
+    → 包装为带 child_thread_id 的 ToolMessage → 通过 ``Command`` 返回。
+    同时把 deliverable 完整快照写入 ``subagent_run`` 状态供前端/Langfuse 查看。
+    """
     # 不再调用 _final_assistant_text，改为直接传 messages 给 _parse_deliverable
     # _final_assistant_text 仍保留（向后兼容其他调用点）
     messages = result.get("messages") or []
@@ -480,6 +497,12 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         tool_call_id: str,
         continuing: bool,
     ):
+        """创建子 AgentRun 记录并标记为 running，供父 run 通过 task 工具委派执行。
+
+        幂等性：基于 ``parent_run_id + child_thread_id + tool_call_id + agent_slug``
+        生成 request_id，重复调用返回已存在 run（``continuing=True`` 场景下重连复用）。
+        ``continuing=True`` 时额外校验子线程归属与子 agent 类型一致。
+        """
         parent_run_id = str(getattr(self.parent_context, "run_id", "") or "").strip()
         if not parent_run_id:
             raise ValueError("当前运行时缺少父运行 ID，无法记录子智能体运行")
@@ -545,6 +568,11 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
             )
 
     def _build_task_tool(self, available_agents: str) -> StructuredTool:
+        """构建 ``task`` StructuredTool（父智能体通过它委派子任务）。
+
+        ``available_agents`` 为已格式化的子智能体列表文本，注入到工具 docstring
+        供 LLM 选择 ``subagent_type``。同步 ``task`` 仅返回提示（实际逻辑在 ``atask``）。
+        """
         def task(
             description: Annotated[str, TASK_DESCRIPTION_ARG],
             subagent_type: Annotated[str, SUBAGENT_TYPE_ARG],
