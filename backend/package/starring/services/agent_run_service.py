@@ -1,4 +1,4 @@
-﻿"""Agent run service (run creation, polling stream, cancel)."""
+"""Agent run service (run creation, polling stream, cancel)."""
 
 from __future__ import annotations
 
@@ -253,6 +253,40 @@ async def create_agent_run_view(
     parent_run_id: str | None = None,
     resume_request_id: str | None = None,
 ) -> dict:
+    """HTTP view 层：参数已在 router 层完成解析，此函数为 service 层 ``create_run`` 的薄包装。
+
+    保留 view 层入口供后续扩展（如审计日志、限流、HTTP 上下文相关逻辑）；
+    业务逻辑全部在 service 层 ``create_run`` 中，触发器等非 HTTP 调用方应直接调 ``create_run``。
+    """
+    return await create_run(
+        query=query,
+        agent_id=agent_id,
+        thread_id=thread_id,
+        meta=meta,
+        image_content=image_content,
+        current_uid=current_uid,
+        db=db,
+        model_spec=model_spec,
+        resume=resume,
+        parent_run_id=parent_run_id,
+        resume_request_id=resume_request_id,
+    )
+
+
+async def create_run(
+    *,
+    query: str | None,
+    agent_id: str,
+    thread_id: str,
+    meta: dict,
+    image_content: str | None,
+    current_uid: str,
+    db: AsyncSession,
+    model_spec: str | None = None,
+    resume: object | None = None,
+    parent_run_id: str | None = None,
+    resume_request_id: str | None = None,
+) -> dict:
     """
     构建对话线程与Agent，构建input_payload
     """
@@ -326,6 +360,7 @@ async def create_agent_run_view(
         "uid": str(current_uid),
         "request_id": request_id,
         "attachment_file_ids": (meta or {}).get("attachment_file_ids") or [],
+        "use_knowledge": (meta or {}).get("use_knowledge"),
         "source": (meta or {}).get("source"),
         "evaluation": (meta or {}).get("evaluation") or None,
         "created_at": utc_now_naive().isoformat(),

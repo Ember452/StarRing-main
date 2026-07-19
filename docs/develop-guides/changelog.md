@@ -1,4 +1,4 @@
-﻿# 版本变更记录
+# 版本变更记录
 
 本页用于记录各版本发布说明（新增、修复与破坏性变更）。
 
@@ -33,6 +33,8 @@
 - 改进 OpenAI 兼容提供商流式工具调用兼容（替代 v0.7.0 的按 provider 禁流式处理）：根因是 LangGraph v3 流式累积对 tool_call 字段“后值覆盖”，SiliconFlow、阿里云百炼等在参数续片里把 `name`/`id` 下发为空字符串覆盖首片真实值。改为 `_ToolCallChunkFixChatOpenAI` 把续片空串 `name`/`id` 归一化为 `None`，对所有 OpenAI 兼容 provider 通用生效且保留流式，移除原 `_NON_STREAMING_TOOL_CALL_PROVIDERS` 名单。
 - 新增 Agent 评估运行入口：`POST /api/agent/eval/runs` 会创建正常对话与 AgentRun，复用 worker 执行链路，并以 `agent_evaluation` 标记写入 conversation、AgentRun 与 Langfuse trace；接口阻塞至运行结束后直接返回最终结果（状态、最终 assistant 输出、Langfuse trace id）。`StarRing-cli` 新增 `StarRing agent eval` 命令，用于从 Langfuse 数据集读取输入并回传实验输出
 - 下沉 AgentRun 基础能力：将「读取某个 run 的最终结果」（`get_agent_run_result`/`load_agent_run_result`，含状态、最终 assistant 输出、Langfuse trace id 与错误）与「阻塞至 run 终结再取结果」（`await_agent_run_result`，复用有限事件流、无额外轮询）提升进 `agent_run_service`，供 chat/eval 及未来定时任务统一复用；eval 运行入口改为非流式复用该能力（不再做 SSE 封装），移除其私有结果构建逻辑（结果不变）。
+- 落地子智能体 Orchestrator-Worker 结构化交付物：新增 `SubAgentDeliverable` Pydantic 模型与 `subagent_deliverable.py` 模块，定义子智能体交付物的结构化 schema（type/format/path/content/metadata）；`subagent_task.py` 增加交付物解析与 prompt 注入函数，子智能体上下文 `SubAgentContext` 新增 `output_format` 字段以支持 `text`/`structured` 两种输出模式；`subagent/graph.py` 在 `output_format="structured"` 时追加结构化输出 prompt 后缀，引导子智能体在末尾产出可解析的 `<deliverable>...</deliverable>` 块。配套新增 `test_subagent_deliverable.py`（14 个单测覆盖 schema 校验、解析与边界场景）与 `test_subagent_task_prompt.py`（覆盖 prompt 注入字段与结构化后缀拼接）。
+- 抽取 `agent_run_service.create_run` 作为触发器系统共用基础：将原 HTTP view 层 `create_agent_run_view` 重命名为 service 层 `create_run`，保留 `create_agent_run_view` 作为薄包装入口供 HTTP 调用方继续使用，业务逻辑全部下沉到 `create_run`；触发器（cron/webhook）等非 HTTP 调用方应直接调用 `create_run`，避免 view 层参数解析与 HTTP 上下文耦合。配合 `input_payload.source` 字段（`manual`/`cron`/`webhook`/`ask_user_question_resume`）区分触发来源，为后续 P1-C 触发器系统接入与 P1-A/P1-B 多智能体编排铺平共用基础。
 
 ## v0.7.0 (2026-06-13)
 
