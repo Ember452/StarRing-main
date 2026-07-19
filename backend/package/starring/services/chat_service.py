@@ -1,4 +1,4 @@
-﻿"""智能体对话服务模块。
+"""智能体对话服务模块。
 
 本模块是 StarRing 平台对话能力的核心编排层，负责将用户请求转化为对 LangGraph 智能体的调用，
 并完成流式/非流式响应、消息持久化、内容安全审计、中断恢复以及子智能体状态查看等能力。
@@ -22,6 +22,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import fields
 from datetime import UTC, datetime
 from typing import Any
 
@@ -178,6 +179,28 @@ def extract_agent_state(values: dict) -> AgentStatePayload:
     }
 
     return result
+
+
+async def _safe_extract_agent_state(agent, langgraph_config: dict, context=None) -> dict:
+    """安全读取 LangGraph 最终 state 并提取 agent_state，失败时返回空 dict。
+
+    用于流式/非流式/resume 路径在流结束后补发最终 agent_state。
+    失败场景（graph 未就绪、checkpointer 不可用、state 反序列化失败等）
+    仅记录 warning 并返回空 dict，不阻断主流程。
+
+    context 参数仅 resume 路径需要传入（保持与原 ``get_graph(context=context)``
+    调用一致）；同步/流式 chat 路径不传，调用 ``get_graph()``。
+    """
+    try:
+        if context is not None:
+            graph = await agent.get_graph(context=context)
+        else:
+            graph = await agent.get_graph()
+        state = await graph.aget_state(langgraph_config)
+        return extract_agent_state(getattr(state, "values", {})) if state else {}
+    except Exception as exc:
+        logger.warning(f"failed to extract agent_state, fallback to empty: {exc}", exc_info=True)
+        return {}
 
 
 def _agent_state_signature(agent_state: AgentStatePayload | dict | None) -> str:
@@ -787,6 +810,14 @@ async def _resolve_agent_runtime(
         user=user,
         context_schema=backend.context_schema,
     )
+
+    # WorkflowBackend 集成：若 context_schema 含 workflow_id 字段且 agent_config 未显式配置，
+    # 用 agent slug 作为 workflow_id 查找依据（约定 workflows.slug == agents.slug）。
+    # 通过 dataclass.fields 检测字段存在性，不引入对 WorkflowBackend 的硬耦合。
+    schema_field_names = {f.name for f in fields(backend.context_schema)}
+    if "workflow_id" in schema_field_names and not agent_config.get("workflow_id"):
+        agent_config["workflow_id"] = agent_item.slug
+
     return agent_item, backend, agent_config
 
 
@@ -1071,12 +1102,7 @@ async def agent_chat(
             }
 
         # 读取 agent_state 供前端展示 todos/artifacts 等
-        try:
-            graph = await agent.get_graph()
-            state = await graph.aget_state(langgraph_config)
-            agent_state = extract_agent_state(getattr(state, "values", {})) if state else {}
-        except Exception:
-            agent_state = {}
+        agent_state = await _safe_extract_agent_state(agent, langgraph_config)
 
         try:
             await save_messages_from_langgraph_state(
@@ -1132,15 +1158,58 @@ async def stream_agent_chat(
 ) -> AsyncIterator[bytes]:
     """流式对话入口：按 NDJSON chunk 持续推送对话进展。
 
-    输出 chunk 的 ``status`` 序列大致为：
-        ``init`` → (多个 ``loading`` / ``agent_state`` / ``stream_event``) → ``finished``
+    参数说明
+    --------
+    query : str
+        用户输入的文本内容。
+    agent_id : str
+        目标智能体的 slug 或 backend_id。
+    thread_id : str | None
+        对话线程 ID。若为 None，方法内部会自动生成一个新的 UUID。
+    meta : dict
+        请求元数据，可包含 ``request_id``、``run_id``、``attachment_file_ids`` 等字段。
+    image_content : str | None
+        图片的 base64 编码字符串（不含 data URI 前缀），用于多模态输入。
+    current_user : User
+        当前登录用户对象。
+    db : AsyncSession
+        当前请求的数据库会话。
+    save_user_message : bool
+        是否将用户消息落库。评测等场景可设为 False 以避免污染数据库。
 
-    期间会实时进行内容安全检查（基于最近若干个 chunk 的累积内容），
+    返回值
+    -------
+    AsyncIterator[bytes]
+        以 NDJSON 格式（每行一个 JSON 对象，以 ``\\n`` 结尾）持续 yield 的字节流。
+
+    输出 chunk 的 ``status`` 序列大致为
+    ------------------------------------
+    ``init`` → (多个 ``loading`` / ``agent_state`` / ``stream_event``) → ``finished``
+
+    各 status 含义：
+    - ``init``：用户消息元信息，供前端立即渲染用户气泡。
+    - ``loading``：AI 生成内容的增量 chunk。
+    - ``agent_state``：智能体运行时状态快照（如当前工具调用进度）。
+    - ``stream_event``：底层协议事件透传（如子智能体的工具调用事件）。
+    - ``finished``：对话正常结束。
+    - ``interrupted``：对话被中断（敏感词拦截或客户端断连）。
+    - ``error``：发生错误。
+
+    内容安全检查
+    ------------
+    期间会进行两阶段内容安全检查：
+    1. **流式阶段**：每累积 10 个 chunk 拼接后检查一次，兼顾性能与时效。
+    2. **整体阶段**：流结束后对完整内容再做一次检查，防止跨 chunk 的敏感词漏检。
     一旦命中敏感词则中断流并保存已生成的部分内容。
 
-    客户端断连（``CancelledError`` / ``ConnectionError``）时通过 ``asyncio.shield``
-    在新 session 中保存中断消息，避免丢失上下文；其他异常同样会保存错误消息并返回 ``error`` chunk。
+    异常处理
+    --------
+    - 客户端断连（``CancelledError`` / ``ConnectionError``）：通过 ``asyncio.shield``
+      在新 session 中异步保存已生成的部分内容，避免上下文丢失。
+    - 其他异常：同样在新 session 中保存错误消息，并返回 ``error`` chunk。
+    - ``finally`` 块中调用 ``flush_langfuse()`` 确保 trace 数据被刷新。
     """
+    # 记录开始时间，用于最终计算 time_cost
     start_time = asyncio.get_event_loop().time()
 
     def make_chunk(content=None, **kwargs):
@@ -1158,17 +1227,21 @@ async def stream_agent_chat(
             + b"\n"
         )
 
+    # ==================== 1. 请求元数据初始化 ====================
+    # 确保 meta 为可写字典，若调用方未传入 request_id 则自动生成
     meta = dict(meta or {})
     if "request_id" not in meta or not meta.get("request_id"):
         logger.warning("请求缺少 request_id，已自动生成一个新的 request_id")
         meta["request_id"] = str(uuid.uuid4())
 
     uid = str(current_user.uid)
+    # 若未提供 thread_id 则自动生成，意味着这是一个全新的对话线程
     if not thread_id:
         thread_id = str(uuid.uuid4())
         logger.warning(f"No thread_id provided, generated new thread_id: {thread_id}")
 
-    # 构造用户消息（含图时使用多模态 content）
+    # ==================== 2. 构造用户消息 ====================
+    # 含图时使用多模态 content（文本 + base64 图片），否则纯文本
     if image_content:
         human_message = HumanMessage(
             content=[
@@ -1181,13 +1254,17 @@ async def stream_agent_chat(
         human_message = HumanMessage(content=query)
         message_type = "text"
 
-    # 输入侧敏感词拦截
+    # ==================== 3. 输入侧敏感词拦截 ====================
+    # 在进入智能体之前先对用户输入做一次敏感词检查，
+    # 命中则直接返回 error chunk，不执行后续逻辑
     if conf.enable_content_guard and await content_guard.check(query):
         yield make_chunk(
             status="error", error_type="content_guard_blocked", error_message="输入内容包含敏感词", meta=meta
         )
         return
 
+    # ==================== 4. 解析智能体运行时 ====================
+    # 根据 agent_id 查找智能体配置、实例化 Agent 并获取运行配置
     try:
         agent_item, agent, agent_config = await _resolve_agent_runtime(
             db=db,
@@ -1196,9 +1273,12 @@ async def stream_agent_chat(
             thread_id=thread_id,
         )
     except ValueError as e:
+        # 智能体不存在或无权访问时返回 error
         yield make_chunk(status="error", error_type="invalid_agent", error_message=str(e), meta=meta)
         return
 
+    # ==================== 5. 补充 meta 上下文信息 ====================
+    # 将查询和智能体相关信息写入 meta，供后续 tracking 和日志使用
     meta.update(
         {
             "query": query,
@@ -1211,7 +1291,9 @@ async def stream_agent_chat(
         }
     )
 
+    # ==================== 6. 构建输入上下文与 Langfuse 追踪 ====================
     messages = [human_message]
+    # 构建智能体输入上下文（含系统提示词、知识库、模型参数等）
     input_context = await build_agent_input_context(
         agent_config,
         thread_id=thread_id,
@@ -1219,7 +1301,12 @@ async def stream_agent_chat(
         run_id=meta.get("run_id"),
         request_id=meta.get("request_id"),
     )
+    # 允许通过 meta 中的 model_override 字段覆盖模型选择
     _apply_model_override(input_context, meta)
+    # 对话级“知识库问答”开关：仅当前端显式下发时才注入，None 时保持智能体默认行为
+    if meta.get("use_knowledge") is not None:
+        input_context["use_knowledge"] = bool(meta.get("use_knowledge"))
+    # 初始化 Langfuse 追踪上下文，用于记录本次对话的全链路 trace
     langfuse_run = _build_langfuse_run_context(
         current_user=current_user,
         thread_id=thread_id,
@@ -1230,14 +1317,20 @@ async def stream_agent_chat(
         message_type=message_type,
         meta=meta,
     )
-    # 累积状态：full_msg / accumulated_content 用于内容安全检查与最终落库
+    # 累积状态变量
+    # full_msg：流结束后拼合出的完整 AIMessage，用于最终落库
+    # accumulated_content：累积的文本片段列表，用于流式内容安全检查
+    # trace_info：Langfuse 追踪信息，落库时附带
+    # last_agent_state_signature：上一次推送的 agent_state 签名，用于去重
     full_msg = None
     accumulated_content: list[str] = []
     trace_info: dict[str, Any] = {}
     last_agent_state_signature = ""
 
     try:
+        # ============ 7. 对话线程绑定与附件处理 ============
         conv_repo = ConversationRepository(db)
+        # 确保当前对话线程已绑定到指定智能体（若未绑定则自动创建绑定）
         await _ensure_thread_bound_agent(
             conv_repo=conv_repo,
             thread_id=thread_id,
@@ -1245,6 +1338,7 @@ async def stream_agent_chat(
             agent_item=agent_item,
         )
 
+        # 将请求中的附件文件 ID 绑定到当前对话线程
         request_attachments = await _bind_request_attachments(
             conv_repo=conv_repo,
             thread_id=thread_id,
@@ -1252,7 +1346,8 @@ async def stream_agent_chat(
             attachment_file_ids=_normalize_attachment_file_ids(meta),
         )
 
-        # init chunk：先下发用户消息元信息，让前端立即显示用户气泡
+        # ============ 8. 下发 init chunk（用户消息元信息） ============
+        # 让前端立即渲染用户气泡，不等 AI 首 token
         init_msg = {
             "role": "user",
             "content": query,
@@ -1267,7 +1362,8 @@ async def stream_agent_chat(
             init_msg["image_content"] = image_content
         yield make_chunk(status="init", meta=meta, msg=init_msg)
 
-        # 用户消息落库（可通过 save_user_message=False 关闭，例如评测场景）
+        # ============ 9. 用户消息落库 ============
+        # save_user_message=False 可用于评测等场景，避免写入数据库
         if save_user_message:
             try:
                 await conv_repo.add_message_by_thread_id(
@@ -1285,16 +1381,23 @@ async def stream_agent_chat(
             except Exception as e:
                 logger.error(f"Error saving user message: {e}")
 
-        # 先构建 langgraph_config
+        # ============ 10. 构建 LangGraph 运行时配置 ============
+        # LangGraph 通过 configurable 中的 thread_id 自动从 checkpointer
+        # 恢复历史 state（包括上传文件、对话历史等），无需手动加载
         langgraph_config = {"configurable": {"thread_id": thread_id, "uid": uid}}
 
-        # LangGraph 会自动从 checkpointer 恢复 state（包括 uploads）
-        # 无需手动加载或传递
-
+        # 重置累积变量（在 init 阶段后重新初始化）
         full_msg = None
         accumulated_content = []
-        # protocol_message_ids 用于在同一 (thread_id, run_key) 下保持 message_id 稳定
+        # protocol_message_ids：用于在同一 (thread_id, run_key) 下保持 message_id 稳定，
+        # 避免因流式协议多次下发同一逻辑消息而生成重复 ID
         protocol_message_ids: dict[tuple[str, str], str] = {}
+
+        # ============ 11. 流式事件主循环 ============
+        # 三种模式的事件：
+        #   - values：智能体状态快照，仅在签名变化时下发 agent_state
+        #   - stream_event：底层协议事件透传（如子智能体工具调用进度）
+        #   - messages：AI 生成内容的增量 chunk（主智能体与子智能体）
         async for mode, payload in _stream_agent_events(
             agent,
             messages,
@@ -1303,7 +1406,8 @@ async def stream_agent_chat(
             metadata=langfuse_run.metadata,
             tags=langfuse_run.tags,
         ):
-            # values 模式：state 快照更新，仅在签名变化时下发 agent_state
+            # ----- 11a. values 模式：state 快照推送 -----
+            # 仅在签名（agent_state 内容的哈希）变化时才下发，避免重复推送
             if mode == "values":
                 agent_state = extract_agent_state(payload if isinstance(payload, dict) else {})
                 signature = _agent_state_signature(agent_state)
@@ -1312,7 +1416,9 @@ async def stream_agent_chat(
                     yield make_chunk(status="agent_state", agent_state=agent_state, meta=meta)
                 continue
 
-            # stream_event 模式：透传智能体底层协议事件（如工具调用进度）
+            # ----- 11b. stream_event 模式：底层协议事件透传 -----
+            # 如子智能体的工具调用开始/结束、进度更新等，
+            # 直接透传给前端，不做额外处理
             if mode == "stream_event":
                 yield make_chunk(
                     status="stream_event",
@@ -1323,15 +1429,18 @@ async def stream_agent_chat(
                 )
                 continue
 
-            # messages 模式：常规消息 chunk（含主智能体与子智能体）
+            # ----- 11c. messages 模式：AI 内容增量 chunk -----
+            # 包含主智能体和子智能体的消息，
+            # 子智能体 chunk 通过 namespace 和 thread_id 区分
             msg, metadata = payload
             namespace = _metadata_namespace(metadata)
             chunk_thread_id = _metadata_thread_id(metadata, thread_id if not namespace else None)
-            # 子智能体 chunk 必须能解析出 thread_id，否则丢弃
+            # 子智能体 chunk 必须能解析出 thread_id，否则丢弃（无法关联上下文）
             if namespace and not chunk_thread_id:
                 continue
 
             is_subagent_chunk = bool(chunk_thread_id and chunk_thread_id != thread_id)
+            # 将 LangGraph 消息转换为前端可消费的 stream_event 列表
             stream_events = _message_payload_STARRING_events(
                 msg,
                 metadata=metadata,
@@ -1342,13 +1451,16 @@ async def stream_agent_chat(
 
             for stream_event in stream_events:
                 content = _stream_event_response(stream_event)
-                # 仅主智能体的文本内容需要参与内容安全检查与累积
+                # 仅主智能体的文本内容参与内容安全检查与累积，
+                # 子智能体内容不在此处检查
                 if not is_subagent_chunk and content:
                     trace_info = get_trace_info(langfuse_run)
                     accumulated_content.append(content)
-                    # 仅检查最近 10 个 chunk 的拼接，兼顾性能与时效
+                    # 流式安全检查：仅检查最近 10 个 chunk 的拼接，
+                    # 兼顾性能与时效（避免逐 chunk 检查的网络开销）
                     content_for_check = "".join(accumulated_content[-10:])
                     if conf.enable_content_guard and await content_guard.check_with_keywords(content_for_check):
+                        # 命中敏感词：构造完整消息、保存已生成内容、中断流
                         full_msg = AIMessage(content="".join(accumulated_content))
                         await save_partial_message(
                             conv_repo,
@@ -1363,6 +1475,7 @@ async def stream_agent_chat(
                         yield make_chunk(status="interrupted", message="检测到敏感内容，已中断输出", meta=meta)
                         return
 
+                # 下发 loading chunk 给前端
                 yield make_chunk(
                     content=content,
                     stream_event=stream_event,
@@ -1371,11 +1484,14 @@ async def stream_agent_chat(
                     thread_id=chunk_thread_id,
                 )
 
-        # 流结束后确保 full_msg 存在（协议层未返回完整消息时用累积内容兜底）
+        # ============ 12. 流结束后处理 ============
+        # 确保 full_msg 存在：若协议层未返回完整的 AIMessage，
+        # 则用 accumulated_content 拼接构造
         full_msg = _ensure_full_msg(full_msg, accumulated_content)
         trace_info = get_trace_info(langfuse_run)
 
-        # 输出侧整体敏感词检查（防止流式检查漏掉跨 chunk 的敏感词）
+        # 输出侧整体敏感词检查：对完整内容再做一次检查，
+        # 防止流式分片检查漏掉跨 chunk 的敏感词组合
         if conf.enable_content_guard and hasattr(full_msg, "content") and await content_guard.check(full_msg.content):
             await save_partial_message(
                 conv_repo,
@@ -1390,27 +1506,30 @@ async def stream_agent_chat(
             yield make_chunk(status="interrupted", message="检测到敏感内容，已中断输出", meta=meta)
             return
 
+        # ============ 13. 中断（Interrupt）处理 ============
+        # 若智能体在执行中触发了 interrupt（如向用户提问），
+        # 则下发 ask_user_question_required chunk，前端需要展示交互 UI
+        # 并等待用户回答后通过 stream_agent_resume 继续执行
         interrupted = False
-        # 检查 interrupt 状态：若智能体在执行中提问，会下发 ask_user_question_required chunk
         async for chunk in check_and_handle_interrupts(agent, langgraph_config, make_chunk, meta, thread_id):
             interrupted = True
             yield chunk
 
         meta["time_cost"] = asyncio.get_event_loop().time() - start_time
-        # 读取最终 agent_state，若与流中最后一次推送不同则补发一次
-        try:
-            graph = await agent.get_graph()
-            state = await graph.aget_state(langgraph_config)
-            agent_state = extract_agent_state(getattr(state, "values", {})) if state else {}
-        except Exception:
-            agent_state = {}
+
+        # ============ 14. 最终 agent_state 补发 ============
+        # 流结束后读取最终 state，若与流中最后一次推送的签名不同则补发一次，
+        # 确保前端拿到最新的智能体状态
+        agent_state = await _safe_extract_agent_state(agent, langgraph_config)
 
         final_signature = _agent_state_signature(agent_state)
         if final_signature and final_signature != last_agent_state_signature:
             last_agent_state_signature = final_signature
             yield make_chunk(status="agent_state", agent_state=agent_state, meta=meta)
 
-        # 先存储数据库，再返回 finished，避免前端查询时数据未落库
+        # ============ 15. 消息落库 ============
+        # 先存储数据库，再返回 finished，
+        # 避免前端在 finished 后立即查询却发现数据未落库
         try:
             await save_messages_from_langgraph_state(
                 agent_instance=agent,
@@ -1431,11 +1550,19 @@ async def stream_agent_chat(
 
         yield make_chunk(status="finished", meta=meta)
 
+    # ==================== 16. 异常处理 ====================
+
     except (asyncio.CancelledError, ConnectionError) as e:
-        # 客户端断连：在新 session 中保存已生成的部分内容，避免丢失上下文
+        # ---------- 16a. 客户端断连 ----------
+        # 场景：用户关闭页面、网络断开等导致 SSE 连接中断
         logger.warning(f"Client disconnected, cancelling stream: {e}")
 
         async def save_cleanup():
+            """在新 session 中保存已生成的部分内容，避免丢失上下文。
+
+            使用 nonlocal 捕获 full_msg 和 accumulated_content，
+            确保在 asyncio.shield 保护下完成清理。
+            """
             nonlocal full_msg
             full_msg = _ensure_full_msg(full_msg, accumulated_content)
 
@@ -1452,11 +1579,13 @@ async def stream_agent_chat(
                     request_id=meta.get("request_id"),
                 )
 
-        # 通过 asyncio.shield 保证清理任务不被外层取消立即终止
+        # asyncio.shield：阻止外层 CancelledError 立即取消清理任务，
+        # 保证清理任务有机会完整执行，避免数据丢失
         cleanup_task = asyncio.create_task(save_cleanup())
         try:
             await asyncio.shield(cleanup_task)
         except asyncio.CancelledError:
+            # 即使 shield 被突破，也不应在此处抛异常
             pass
         except Exception as exc:
             logger.error(f"Error during cleanup save: {exc}")
@@ -1464,6 +1593,8 @@ async def stream_agent_chat(
         yield make_chunk(status="interrupted", message="对话已中断", meta=meta)
 
     except Exception as e:
+        # ---------- 16b. 其他运行时异常 ----------
+        # 场景：智能体执行错误、数据库异常、网络超时等
         logger.exception(f"Error streaming messages: {e}")
 
         error_msg = f"Error streaming messages: {e}"
@@ -1471,7 +1602,7 @@ async def stream_agent_chat(
 
         full_msg = _ensure_full_msg(full_msg, accumulated_content)
 
-        # 异常分支同样在新 session 中保存错误消息，便于后续追溯
+        # 在新 session 中保存错误信息，便于后续追溯和调试
         async with pg_manager.get_async_session_context() as new_db:
             new_conv_repo = ConversationRepository(new_db)
             await save_partial_message(
@@ -1487,6 +1618,9 @@ async def stream_agent_chat(
 
         yield make_chunk(status="error", error_type=error_type, error_message=error_msg, meta=meta)
     finally:
+        # ==================== 17. 清理 ====================
+        # 确保 Langfuse 缓冲的 trace 事件被推送到远端，
+        # 无论正常结束还是异常退出都会执行
         flush_langfuse()
 
 
@@ -1634,12 +1768,7 @@ async def stream_agent_resume(
 
         meta["time_cost"] = asyncio.get_event_loop().time() - start_time
 
-        try:
-            graph = await agent.get_graph(context=context)
-            state = await graph.aget_state(langgraph_config)
-            agent_state = extract_agent_state(getattr(state, "values", {})) if state else {}
-        except Exception:
-            agent_state = {}
+        agent_state = await _safe_extract_agent_state(agent, langgraph_config, context=context)
 
         final_signature = _agent_state_signature(agent_state)
         if final_signature and final_signature != last_agent_state_signature:
