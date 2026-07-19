@@ -877,3 +877,45 @@ class Trigger(Base):
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
         }
+
+
+class Workflow(Base):
+    """Workflow table - 工作流定义表（P1-B 硬编排引擎）"""
+
+    __tablename__ = "workflows"
+
+    id = Column(String(64), primary_key=True, comment="Workflow ID (UUID)")
+    name = Column(String(128), nullable=False, comment="工作流名称")
+    desc = Column(String(512), nullable=False, default="", comment="描述")
+    # slug 用于被 agent_id 引用（与 agents.slug 一致），WorkflowBackend 实例的 agent_id = workflow.slug
+    slug = Column(
+        String(80), unique=True, index=True, nullable=False, comment="工作流唯一 slug"
+    )
+    owner_uid = Column(
+        String(64), index=True, nullable=False, comment="创建者 UID"
+    )
+    definition = Column(
+        JSON, nullable=False, default=dict,
+        comment='工作流定义：{"nodes": [...], "edges": [...], "version": 1}',
+    )
+    version = Column(Integer, nullable=False, default=1, comment="当前版本号")
+    is_active = Column(Boolean, default=True, index=True, comment="是否启用")
+    created_at = Column(DateTime, default=utc_now_naive, comment="Creation time")
+    updated_at = Column(
+        DateTime, default=utc_now_naive, onupdate=utc_now_naive, comment="Update time"
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """序列化为 dict。"""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "desc": self.desc,
+            "slug": self.slug,
+            "owner_uid": self.owner_uid,
+            "definition": self.definition or {},
+            "version": self.version,
+            "is_active": self.is_active,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
