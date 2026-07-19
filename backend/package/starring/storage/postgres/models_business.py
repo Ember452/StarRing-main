@@ -1,4 +1,4 @@
-﻿"""PostgreSQL 业务数据模型 - 用户、部门、对话等相关表"""
+"""PostgreSQL 业务数据模型 - 用户、部门、对话等相关表"""
 
 from datetime import timedelta
 from typing import Any
@@ -803,6 +803,77 @@ class AgentRun(Base):
             "error_message": self.error_message,
             "started_at": format_utc_datetime(self.started_at),
             "finished_at": format_utc_datetime(self.finished_at),
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class Trigger(Base):
+    """Trigger table - 触发器配置表（cron / webhook 触发器）"""
+
+    __tablename__ = "triggers"
+
+    id = Column(String(64), primary_key=True, comment="Trigger ID (UUID)")
+    name = Column(String(128), nullable=False, comment="触发器名称")
+    desc = Column(String(512), nullable=False, default="", comment="描述")
+    trigger_type = Column(
+        String(32), nullable=False, index=True, comment="触发器类型: cron / webhook"
+    )
+    # agent_id 用 String 引用 agents.slug（与 AgentRun.agent_id 一致），不加 ForeignKey
+    # 原因：agents 表主键是 Integer id，slug 是 unique 但非主键，跨约束 FK 会导致迁移复杂
+    agent_id = Column(
+        String(80), nullable=False, index=True, comment="关联的 Agent slug"
+    )
+    uid = Column(
+        String(64), index=True, nullable=False,
+        comment="创建者 UID，触发器以其身份调 create_run",
+    )
+    config = Column(
+        JSON, nullable=False, default=dict,
+        comment='触发器配置：cron={"cron_expr","timezone"} / webhook={"secret","allowed_ips"}',
+    )
+    input_query = Column(
+        Text, nullable=True,
+        comment="触发器执行时的输入 query（可模板化，P2 扩展）",
+    )
+    is_active = Column(Boolean, default=True, index=True, comment="是否启用")
+    last_run_at = Column(DateTime, nullable=True, comment="上次执行时间")
+    last_run_status = Column(
+        String(32), nullable=True,
+        comment="上次执行状态: completed/failed/running/interrupted",
+    )
+    last_run_id = Column(
+        String(64), nullable=True, index=True, comment="上次执行的 AgentRun ID"
+    )
+    run_count = Column(Integer, default=0, comment="累计执行次数")
+    created_at = Column(DateTime, default=utc_now_naive, comment="Creation time")
+    updated_at = Column(
+        DateTime, default=utc_now_naive, onupdate=utc_now_naive, comment="Update time"
+    )
+
+    def to_dict(self, *, include_secret: bool = False) -> dict[str, Any]:
+        """序列化为 dict。webhook secret 默认脱敏（仅显示前 8 位）。"""
+        config = self.config or {}
+        serialized_config = dict(config)
+        # webhook secret 脱敏
+        if not include_secret and self.trigger_type == "webhook" and isinstance(serialized_config, dict):
+            secret = serialized_config.get("secret", "")
+            if secret:
+                serialized_config["secret"] = secret[:8] + "***" if len(secret) > 8 else "***"
+        return {
+            "id": self.id,
+            "name": self.name,
+            "desc": self.desc,
+            "trigger_type": self.trigger_type,
+            "agent_id": self.agent_id,
+            "uid": self.uid,
+            "config": serialized_config,
+            "input_query": self.input_query,
+            "is_active": self.is_active,
+            "last_run_at": format_utc_datetime(self.last_run_at),
+            "last_run_status": self.last_run_status,
+            "last_run_id": self.last_run_id,
+            "run_count": self.run_count,
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
         }
