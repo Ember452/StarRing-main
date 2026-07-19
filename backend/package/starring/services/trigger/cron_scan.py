@@ -39,6 +39,8 @@ async def scan_triggers(ctx: dict) -> None:
     """ARQ cron 元任务入口：每分钟扫描 triggers 表，到点的触发器入队执行。
 
     幂等性：相同 (trigger_id, scheduled_time) 维度只入队一次（ARQ _job_id 去重）。
+    并发安全：本任务由 ARQ cron 注册，单 worker 进程内串行执行（无并发风险）；
+    多 worker 部署时仍依赖 _job_id 去重，未引入分布式锁（首期规模可控）。
     """
     del ctx
     now_utc = utc_now_naive()

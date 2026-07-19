@@ -53,6 +53,7 @@ def verify_signature(secret: str, signature: str, timestamp: str, body: bytes) -
         return False
 
     expected = compute_signature(secret, timestamp, body)
+    # 使用常量时间比较而非 == ：防止攻击者通过响应耗时差异逐字节爆破签名（timing attack）
     return hmac.compare_digest(expected, signature)
 
 
