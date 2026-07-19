@@ -1,4 +1,4 @@
-﻿"""ARQ worker for agent runs."""
+"""ARQ worker for agent runs."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from starring.services.run_queue_service import (
     has_cancel_signal,
     wait_for_cancel_signal,
 )
+from starring.services.trigger.cron_scan import scan_triggers
 from starring.storage.postgres.manager import pg_manager
 from starring.storage.postgres.models_business import User
 from starring.utils.logging_config import logger
@@ -148,6 +149,28 @@ async def mark_run_terminal(run_id: str, status: str, error_type: str | None = N
     async with pg_manager.get_async_session_context() as db:
         repo = AgentRunRepository(db)
         await repo.set_terminal_status(run_id, status=status, error_type=error_type, error_message=error_message)
+        # 触发器状态钩子：若 run 来自触发器，更新对应 Trigger 的 last_run_status
+        await _update_trigger_status_if_any(db, run_id, status)
+
+
+async def _update_trigger_status_if_any(db, run_id: str, status: str) -> None:
+    """若 AgentRun.input_payload.trigger_id 存在，更新对应 Trigger 的 last_run_status。
+
+    幂等保护：TriggerRepository.mark_finished_if_current 仅当 last_run_id == run_id 时才更新，
+    避免旧 run 终结覆盖新 run 的状态。普通 chat run（input_payload 无 trigger_id）立即 return。
+    """
+    from starring.repositories.trigger_repository import TriggerRepository
+
+    run = await AgentRunRepository(db).get_run(run_id)
+    if not run:
+        return
+    trigger_id = (run.input_payload or {}).get("trigger_id")
+    if not trigger_id:
+        return
+    try:
+        await TriggerRepository(db).mark_finished_if_current(trigger_id, run_id, status)
+    except Exception as e:
+        logger.warning(f"Failed to update trigger status for run {run_id}: {e}")
 
 
 async def _load_user(uid: str):
@@ -316,6 +339,7 @@ async def process_agent_run(ctx, run_id: str):
         "uid": user.uid,
         "has_image": bool(image_content),
         "attachment_file_ids": payload.get("attachment_file_ids") or [],
+        "use_knowledge": payload.get("use_knowledge"),
         "model_spec": payload.get("model_spec"),
     }
     if payload.get("source"):
@@ -530,14 +554,38 @@ async def _worker_shutdown(ctx):
     await pg_manager.close()
 
 
+async def execute_trigger_run(ctx: dict, trigger_id: str, scheduled_time_iso: str) -> dict:
+    """ARQ 任务入口：执行到点的触发器。
+
+    与 process_agent_run 同级注册在 WorkerSettings.functions 中，
+    由 scan_triggers 元任务 enqueue 触发。
+    """
+    from starring.services.trigger.service import execute_trigger
+
+    del ctx
+    return await execute_trigger(
+        trigger_id=trigger_id, scheduled_time_iso=scheduled_time_iso
+    )
+
+
 class WorkerSettings:
-    functions = [process_agent_run]
+    functions = [process_agent_run, execute_trigger_run]
     max_tries = 2
     retry_jobs = True
     job_timeout = 3600
     keep_result = 60
     on_startup = _worker_startup
     on_shutdown = _worker_shutdown
+    # cron_jobs：注册每分钟扫描 triggers 表的元任务（方案 C）
+    # 用 try/except 兜底：arq.cron 在某些版本可能未导出
+    cron_jobs: list = []
+    try:
+        from arq.cron import cron as _arq_cron
+
+        # 每分钟第 0 秒执行 scan_triggers；minute=None 等价于 "*"（每分钟）
+        cron_jobs = [_arq_cron(scan_triggers, hour=None, minute=None, second={0})]
+    except Exception:
+        cron_jobs = []
     try:
         from arq.connections import RedisSettings
 
