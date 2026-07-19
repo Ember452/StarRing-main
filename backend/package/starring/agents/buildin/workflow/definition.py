@@ -116,7 +116,13 @@ class WorkflowDefinition(BaseModel):
         return self
 
     def _check_no_cycles(self) -> None:
-        """DFS 检测环路（不含 start/end 节点的环非法）。"""
+        """DFS 检测环路（不含 start/end 节点的环非法）。
+
+        采用经典的三色标记法（WHITE 未访问 / GRAY 在当前递归栈中 / BLACK 已完成）：
+        - 遇到 GRAY 节点说明回边存在，即发现环
+        - BLACK 节点可安全跳过，避免重复遍历
+        时间复杂度 O(V+E)，足以覆盖 50 节点 / 100 边的工作流上限。
+        """
         adj: dict[str, list[str]] = {n.id: [] for n in self.nodes}
         for edge in self.edges:
             adj[edge.source].append(edge.target)

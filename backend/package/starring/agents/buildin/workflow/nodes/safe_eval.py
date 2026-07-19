@@ -3,6 +3,12 @@
 仅允许：布尔运算 / 比较运算 / 算术运算 / 字面量 / 变量访问 / 下标 / 属性读。
 禁用：函数调用 / import / lambda / comprehensions / 赋值 / 属性写。
 
+禁用函数调用与 import 的根本原因：工作流定义由前端用户编辑，表达式来源不可信。
+一旦允许 ``__import__("os").system(...)`` 或 ``open("/etc/passwd").read()`` 这类调用，
+攻击者可在 condition 节点中执行任意代码、读取敏感文件或横向渗透。这里通过 AST 白名单
+做语法层过滤，配合 ``_FORBIDDEN_ATTRS`` 拦截 ``__class__`` / ``__subclasses__`` 等逃逸路径，
+保证求值器无法触达任何具备副作用的 Python 能力。
+
 设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §六
 """
 from __future__ import annotations

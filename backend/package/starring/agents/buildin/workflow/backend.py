@@ -143,9 +143,9 @@ class WorkflowBackend(BaseAgent):
             # 检查是否是 condition 节点
             source_node = definition.get_node(source_id)
             if source_node.node_type == "condition":
-                # condition 节点：通过 Command(goto=...) 实现跳转，注册直接边
-                # LangGraph 会根据 Command.goto 跳转，无需显式 conditional_edges
-                # 必须把所有可能的目标节点都注册为直接边
+                # condition 节点：运行时通过 Command(goto=...) 动态跳转，不走 conditional_edges。
+                # 这里把所有可能目标都注册为直接边是 LangGraph 的硬性要求：
+                # 编译期需要枚举所有可达目标以构建图结构，未注册的 goto 目标会触发 KeyError。
                 for edge in edges:
                     builder.add_edge(source_id, edge.target)
             else:
@@ -164,7 +164,9 @@ class WorkflowBackend(BaseAgent):
         builder.set_finish_point(end_id)
 
         # 4. 编译
-        # 注意：checkpointer 在 ainvoke 时通过 config 传入，这里不绑定
+        # checkpointer 不在这里绑定：LangGraph 支持在 astream/ainvoke 时通过 config={"configurable": {"checkpoint_ns": ...}}
+        # 传入 checkpointer，由调用方（chat_service / agent_run_service）统一管理持久化后端，
+        # 这样同一个编译产物可以在不同 thread / 不同 checkpointer 下复用。
         return builder.compile()
 
     async def _wrap_node_executor(

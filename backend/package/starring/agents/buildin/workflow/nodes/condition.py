@@ -34,7 +34,9 @@ async def execute_condition(
     cases = config["cases"]
     default_branch = config.get("default")
 
-    # 构造求值上下文：node_outputs 字典（含 deliverable.summary/.confidence/.key_findings 等）
+    # 求值上下文：把上游各节点产出的 SubAgentDeliverable 字典注入到 node_outputs 变量下，
+    # 表达式形如 ``node_outputs["node_1"].summary`` 或 ``node_outputs["node_2"].confidence > 0.7``
+    # 即可访问前驱节点的 summary / confidence / key_findings 等字段。
     eval_context = {
         "node_outputs": state.get("node_outputs", {}),
     }
