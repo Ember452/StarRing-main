@@ -287,8 +287,14 @@ async def create_run(
     parent_run_id: str | None = None,
     resume_request_id: str | None = None,
 ) -> dict:
-    """
-    构建对话线程与Agent，构建input_payload
+    """创建对话 run 并入队 ARQ worker 执行（chat / resume 两种 run_type 共用入口）。
+
+    执行流程：会话线程与用户校验 → 智能体可见性校验 → 解析实际使用模型
+    → 构建 input_payload 快照 → 持久化 run 记录与输入消息 → enqueue_job。
+
+    幂等性：基于 ``request_id`` 全局唯一，重复提交返回已存在 run；
+    resume 场景额外校验 ``parent_run_id`` 必须为 ``interrupted`` 状态，
+    并复用父 run 的 ``model_spec`` 保证单次运行模型一致。
     """
     if not query and resume is None:
         raise HTTPException(status_code=422, detail="query 或 resume 不能为空")
@@ -425,6 +431,7 @@ async def create_run(
 
 
 async def get_agent_run_view(*, run_id: str, current_uid: str, db: AsyncSession) -> dict:
+    """HTTP view 层：返回单个 run 的当前状态（不含事件流）。"""
     repo = AgentRunRepository(db)
     run = await repo.get_run_for_user(run_id, str(current_uid))
     if not run:
@@ -504,6 +511,10 @@ async def await_agent_run_result(*, run_id: str, current_uid: str) -> dict:
 
 
 async def cancel_agent_run_view(*, run_id: str, current_uid: str, db: AsyncSession) -> dict:
+    """请求取消运行：标记 run 状态为 ``cancel_requested`` 并向 Redis 发布取消信号。
+
+    实际终止由 worker 在下一轮检查时完成（协作式取消），本函数立即返回。
+    """
     repo = AgentRunRepository(db)
     run = await repo.get_run_for_user(run_id, str(current_uid))
     if not run:
@@ -521,7 +532,16 @@ async def stream_agent_run_events(
     current_uid: str,
     verbose: bool = True,
 ) -> AsyncIterator[str]:
-    """从 Redis Stream 读取事件，转为 SSE 格式返回前端"""
+    """从 Redis Stream 拉取 run 事件并转为 SSE 推送给前端。
+
+    阻塞循环：每轮先读 DB 获取 run 状态，再从 Redis Stream 拉取增量事件，
+    命中 ``end`` 事件或 run 已终结即退出；否则按 ``SSE_POLL_INTERVAL_SECONDS``
+    间隔继续轮询。
+
+    健壮性：DB/Redis 异常时 yield error 事件后退出（不静默重试）；
+    每 ``SSE_HEARTBEAT_SECONDS`` 发一次心跳保活；
+    连接总时长上限 ``SSE_MAX_CONNECTION_MINUTES``，超时自然退出。
+    """
     started_at = utc_now_naive()
     last_heartbeat_ts = started_at
 
@@ -619,6 +639,7 @@ async def stream_agent_run_events(
 
 
 async def get_active_run_by_thread(*, thread_id: str, current_uid: str, db: AsyncSession) -> dict:
+    """查询线程当前是否有活跃 run（pending/running/cancel_requested/interrupted）。"""
     from sqlalchemy import select
     from starring.storage.postgres.models_business import AgentRun
 
