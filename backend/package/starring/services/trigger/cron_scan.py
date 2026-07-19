@@ -21,6 +21,19 @@ from starring.storage.postgres.models_business import Trigger
 from starring.utils.datetime_utils import utc_now_naive
 from starring.utils.logging_config import logger
 
+# 模块加载时一次性导入 cron 依赖，避免 _is_due 每次调用都尝试 import。
+# 未安装时记录 error 并设置可用性标志，_is_due 直接返回 False（保持原行为）。
+try:
+    from croniter import croniter  # type: ignore[import-not-found]
+    import pytz  # type: ignore[import-not-found]
+
+    _CRON_DEPS_AVAILABLE = True
+except ImportError as e:
+    _CRON_DEPS_AVAILABLE = False
+    logger.error(
+        f"croniter/pytz not installed, cron triggers will be skipped: {e}"
+    )
+
 
 async def scan_triggers(ctx: dict) -> None:
     """ARQ cron 元任务入口：每分钟扫描 triggers 表，到点的触发器入队执行。
@@ -72,11 +85,8 @@ def _is_due(trigger: Trigger, now_utc: datetime) -> bool:
     Returns:
         True 表示触发器在当前分钟到点
     """
-    try:
-        from croniter import croniter
-        import pytz
-    except ImportError as e:
-        logger.error(f"croniter/pytz not installed: {e}")
+    if not _CRON_DEPS_AVAILABLE:
+        # 依赖未安装时直接返回 False（模块加载时已记录 error 日志）
         return False
 
     config = trigger.config or {}
