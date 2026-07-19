@@ -33,6 +33,7 @@ from starring.repositories.agent_run_repository import AgentRunRepository
 from starring.repositories.user_repository import UserRepository
 from starring.storage.postgres.manager import pg_manager
 from starring.storage.postgres.models_business import Agent
+from starring.utils import logger
 from starring.utils.datetime_utils import utc_isoformat
 from starring.utils.subagent_thread_utils import make_child_thread_id
 
@@ -212,7 +213,12 @@ def _parse_deliverable(messages: list, artifacts_from_state: list[str]) -> SubAg
 
     try:
         return SubAgentDeliverable.model_validate(payload)
-    except Exception:
+    except Exception as exc:
+        # 兜底不抛异常（设计原则），但必须留下日志便于排查 LLM 输出格式问题
+        logger.warning(
+            f"subagent deliverable pydantic 校验失败，回退到 raw_text 兜底: {exc}",
+            exc_info=True,
+        )
         return SubAgentDeliverable(
             summary="",
             raw_text=_truncate_raw_text(all_text),
