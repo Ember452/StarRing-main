@@ -36,6 +36,7 @@
             <span>复制 ID</span>
           </button>
           <button
+            v-if="canManageDatabase"
             type="button"
             class="lucide-icon-btn extension-panel-action extension-panel-action-primary"
             @click="showEditModal"
@@ -70,7 +71,7 @@
         <div v-if="isMilvus" v-show="activeTab === 'filetable'" class="tab-panel file-panel">
           <div class="file-management-info">
             <div class="file-info-title">
-              <div class="file-info-title-row">
+              <div class="file-info-title-row" v-if="canManageDatabase">
                 <button
                   type="button"
                   class="lucide-icon-btn extension-panel-action extension-panel-action-primary"
@@ -91,7 +92,7 @@
             </div>
             <div class="file-panel-status">
               <div
-                v-if="pendingParseCount > 0"
+                v-if="canManageDatabase && pendingParseCount > 0"
                 class="file-stat-card file-stat-action file-stat-summary"
                 @click="confirmBatchParse"
               >
@@ -102,7 +103,7 @@
                 </div>
               </div>
               <div
-                v-if="pendingIndexCount > 0"
+                v-if="canManageDatabase && pendingIndexCount > 0"
                 class="file-stat-card file-stat-action file-stat-summary"
                 @click="confirmBatchIndex"
               >
@@ -127,6 +128,7 @@
                 </div>
               </div>
               <button
+                v-if="canManageDatabase"
                 type="button"
                 class="file-stat-card file-stat-summary file-stat-repair"
                 :disabled="statsRepairing"
@@ -143,6 +145,7 @@
                 </div>
               </button>
               <button
+                v-if="canManageDatabase"
                 type="button"
                 class="file-stat-card file-stat-summary file-stat-repair"
                 :disabled="statsRepairing"
@@ -176,6 +179,7 @@
                     <p>调整当前知识库的检索参数。</p>
                   </div>
                   <button
+                    v-if="canManageDatabase"
                     type="button"
                     class="lucide-icon-btn extension-panel-action extension-panel-action-primary"
                     :disabled="searchConfigSaving"
@@ -690,7 +694,7 @@ watch(
 )
 
 const backToDatabase = () => {
-  router.push({ path: '/extensions', query: { tab: 'knowledge' } })
+  router.push({ path: '/knowledge' })
 }
 
 const copyDatabaseId = async () => {
@@ -745,6 +749,13 @@ const fileList = computed(() => {
 })
 
 const canEditShareConfig = computed(() => userStore.isSuperAdmin || userStore.isAdmin)
+
+// 管理类操作（编辑/上传/删除）权限：当前后端 update/delete/upload 等接口仍为 admin-only，
+// 故普通用户即使为知识库 owner 也只能只读浏览，避免点击管理按钮后接口 403 报错。
+// 后续如需放开 owner 管理自己知识库的能力，需要同步放宽后端相关端点权限。
+const canManageDatabase = computed(() => {
+  return userStore.isSuperAdmin || userStore.isAdmin
+})
 
 const shareConfigDisplay = computed(() => {
   const shareConfig = database.value?.share_config || { access_level: 'global' }

@@ -488,7 +488,7 @@ const navigateToConfigPage = (kind) => {
   setTimeout(() => {
     switch (kind) {
       case 'knowledges':
-        router.push({ path: '/extensions', query: { tab: 'knowledge' } })
+        router.push({ path: '/knowledge' })
         break
       case 'tools':
         router.push({ path: '/extensions', query: { tab: 'tools' } })

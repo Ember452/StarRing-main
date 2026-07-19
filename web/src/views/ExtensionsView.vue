@@ -11,9 +11,6 @@
     />
 
     <div v-if="!isDetailPage" class="extensions-content">
-      <div v-if="userStore.isAdmin && activeTab === 'knowledge'" class="tab-panel">
-        <DataBaseView ref="knowledgeRef" embedded />
-      </div>
       <div v-if="userStore.isAdmin && activeTab === 'tools'" class="tab-panel">
         <ToolsCardList ref="toolsRef" />
       </div>
@@ -36,20 +33,18 @@ import ToolsCardList from '@/components/extensions/ToolsCardList.vue'
 import McpCardList from '@/components/extensions/McpCardList.vue'
 import SkillCardList from '@/components/extensions/SkillCardList.vue'
 import PageHeader from '@/components/shared/PageHeader.vue'
-import DataBaseView from '@/views/DataBaseView.vue'
 import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const activeTab = ref(null)
-const knowledgeRef = ref(null)
 const skillsRef = ref(null)
 const mcpRef = ref(null)
 const toolsRef = ref(null)
 
+// 知识库已迁移到独立一级导航 /knowledge，此处仅保留工具/MCP/Skill 扩展
 const adminExtensionTabs = [
-  { key: 'knowledge', label: '知识库' },
   { key: 'tools', label: '工具' },
   { key: 'mcp', label: 'MCP' },
   { key: 'skills', label: 'Skills' }
@@ -76,7 +71,6 @@ const replaceTabQuery = (tab) => {
 
 const isDetailPage = computed(() => {
   return (
-    route.path.startsWith('/extensions/knowledgebase/') ||
     route.path.startsWith('/extensions/mcp/') ||
     route.path.startsWith('/extensions/skill/')
   )
@@ -84,7 +78,6 @@ const isDetailPage = computed(() => {
 
 const activeChildLoading = computed(() => {
   const refMap = {
-    knowledge: knowledgeRef,
     tools: toolsRef,
     skills: skillsRef,
     mcp: mcpRef

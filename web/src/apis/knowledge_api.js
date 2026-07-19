@@ -1,4 +1,6 @@
-import { apiGet, apiAdminGet, apiAdminPost, apiAdminPut, apiAdminDelete, apiRequest } from './base'
+import { apiGet, apiPost, apiAdminGet, apiAdminPost, apiAdminPut, apiAdminDelete, apiRequest } from './base'
+// 注意：getDatabaseInfo 与 createDatabase 走 apiGet/apiPost（非 apiAdmin*）以兼容普通用户访问；
+// 后端 GET/POST /api/knowledge/databases[/{kb_id}] 已通过 share_config 权限校验放宽到 get_required_user。
 
 /**
  * 知识库管理API模块
@@ -20,20 +22,22 @@ export const databaseApi = {
 
   /**
    * 创建知识库
+   * 普通用户亦可创建（后端强制 share_config=private），故走 apiPost 而非 apiAdminPost
    * @param {Object} databaseData - 知识库数据
    * @returns {Promise} - 创建结果
    */
   createDatabase: async (databaseData) => {
-    return apiAdminPost('/api/knowledge/databases', databaseData)
+    return apiPost('/api/knowledge/databases', databaseData)
   },
 
   /**
    * 获取知识库详细信息
+   * 普通用户亦可访问自己有权限的知识库详情，故走 apiGet 而非 apiAdminGet
    * @param {string} kbId - 知识库ID
    * @returns {Promise} - 知识库信息
    */
   getDatabaseInfo: async (kbId) => {
-    return apiAdminGet(`/api/knowledge/databases/${kbId}`)
+    return apiGet(`/api/knowledge/databases/${kbId}`)
   },
 
   /**

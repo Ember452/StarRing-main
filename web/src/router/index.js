@@ -112,16 +112,6 @@ const router = createRouter({
           },
           children: [
             {
-              path: 'knowledgebase/:kbId',
-              name: 'ExtensionKnowledgeBaseDetail',
-              component: () => import('../views/DataBaseInfoView.vue'),
-              meta: {
-                keepAlive: false,
-                requiresAuth: true,
-                requiresAdmin: true
-              }
-            },
-            {
               path: 'mcp/:slug',
               name: 'ExtensionMcpDetail',
               component: () => import('../components/extensions/McpDetailView.vue'),
@@ -141,6 +131,26 @@ const router = createRouter({
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      // 知识库一级导航：所有登录用户可见，普通用户基于 share_config 权限模型访问
+      path: '/knowledge',
+      name: 'knowledge',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'KnowledgeList',
+          component: () => import('../views/DataBaseView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: ':kbId',
+          name: 'KnowledgeDetail',
+          component: () => import('../views/DataBaseInfoView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
         }
       ]
     },

@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import os
 import textwrap
 import time
@@ -207,9 +207,13 @@ async def create_database(
     additional_params: dict | None = Body(None),
     llm_model_spec: str | None = Body(None),
     share_config: dict | None = Body(None),
-    current_user: User = Depends(get_admin_user),
+    current_user: User = Depends(get_required_user),
 ):
-    """创建知识库"""
+    """创建知识库
+
+    所有登录用户均可创建个人知识库。普通用户创建时若未指定 share_config，
+    默认 access_level=private，仅创建者自己可见；管理员可指定任意共享级别。
+    """
     logger.debug(
         f"Create database {database_name} with kb_type {kb_type}, "
         f"additional_params {additional_params}, llm_model_spec {llm_model_spec}, "
@@ -248,13 +252,21 @@ async def create_database(
         else:
             embedding_model_spec = None
 
+        # 普通用户创建的知识库默认 private；管理员尊重传入的 share_config
+        is_admin = current_user.role in ("admin", "superadmin")
+        effective_share_config = share_config if is_admin else {
+            "access_level": "private",
+            "department_ids": [],
+            "user_uids": [],
+        }
+
         database_info = await knowledge_base.create_database(
             database_name,
             description,
             kb_type=kb_type,
             embedding_model_spec=embedding_model_spec,
             llm_model_spec=llm_model_spec,
-            share_config=share_config,
+            share_config=effective_share_config,
             created_by=current_user.uid,
             created_by_department_id=current_user.department_id,
             **additional_params,
@@ -275,7 +287,11 @@ async def create_database(
 
 @knowledge.get("/databases/accessible")
 async def get_accessible_databases(current_user: User = Depends(get_required_user)):
-    """获取当前用户有权访问的知识库列表（用于智能体配置）"""
+    """获取当前用户有权访问的知识库列表
+
+    返回字段完整支持知识库列表页展示：基础信息 + 创建时间 + 文件统计 + 共享配置。
+    用于智能体配置和「知识库」一级导航列表页。
+    """
     try:
         databases = await knowledge_base.get_databases_by_uid(current_user.uid)
 
@@ -283,8 +299,14 @@ async def get_accessible_databases(current_user: User = Depends(get_required_use
             {
                 "name": db.get("name", ""),
                 "kb_id": db.get("kb_id"),
+                "kb_type": db.get("kb_type"),
                 "description": db.get("description", ""),
                 "created_by": db.get("created_by"),
+                "created_at": db.get("created_at"),
+                "share_config": db.get("share_config"),
+                # 文件数对齐 get_database_info() 返回的 row_count 字段
+                "row_count": db.get("row_count", 0),
+                "is_owner": db.get("created_by") == current_user.uid,
             }
             for db in databases.get("databases", [])
         ]
@@ -362,8 +384,22 @@ async def get_mindmap_diff_route(kb_id: str, current_user: User = Depends(get_ad
 
 
 @knowledge.get("/databases/{kb_id}")
-async def get_database_info(kb_id: str, current_user: User = Depends(get_admin_user)):
-    """获取知识库详细信息"""
+async def get_database_info(kb_id: str, current_user: User = Depends(get_required_user)):
+    """获取知识库详细信息
+
+    所有登录用户均可访问，但需通过 share_config 权限校验：
+    - 超级管理员：全部可见
+    - 部门/全局共享：按 share_config 规则
+    - 普通用户：仅自己创建或被共享的
+    """
+    user_info = {
+        "uid": current_user.uid,
+        "role": current_user.role,
+        "department_id": current_user.department_id,
+    }
+    if not await knowledge_base.check_accessible(user_info, kb_id):
+        raise HTTPException(status_code=403, detail="没有权限访问该知识库")
+
     database = await knowledge_base.get_database_info(kb_id)
     if database is None:
         raise HTTPException(status_code=404, detail="Database not found")

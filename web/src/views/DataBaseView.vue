@@ -261,7 +261,7 @@ const { databases, state: dbState } = storeToRefs(databaseStore)
 
 const knowledgeActiveView = 'documents'
 const knowledgeViewItems = [
-  { key: 'documents', label: '文档知识库', path: '/extensions?tab=knowledge' }
+  { key: 'documents', label: '文档知识库', path: '/knowledge' }
 ]
 
 const kbTypes = computed(() => Object.keys(supportedKbTypes.value))
@@ -506,13 +506,13 @@ const cardTags = (database) => {
 }
 
 const navigateToDatabase = (database) => {
-  router.push({ path: `/extensions/knowledgebase/${database.kb_id}` })
+  router.push({ path: `/knowledge/${database.kb_id}` })
 }
 
 watch(
   () => route.path,
   (newPath) => {
-    if (newPath === '/extensions' && route.query.tab === 'knowledge') {
+    if (newPath === '/knowledge') {
       databaseStore.loadDatabases()
     }
   }

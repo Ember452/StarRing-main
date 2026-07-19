@@ -11,7 +11,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   MessageCirclePlus,
-  AlarmClock
+  AlarmClock,
+  Database
 } from 'lucide-vue-next'
 
 import { useConfigStore } from '@/stores/config'
@@ -117,7 +118,7 @@ const activeConversationThreadId = computed(() => {
   return route.path.startsWith('/agent') ? currentThreadId.value : null
 })
 const organizationName = computed(() => {
-  return infoStore.organization.name || infoStore.branding.name || 'starring'
+  return infoStore.organization.name || infoStore.branding.name || 'StarRing'
 })
 
 // 下面是导航菜单部分，添加智能体项
@@ -138,6 +139,15 @@ const mainList = computed(() => {
     path: '/workspace',
     icon: FolderKanban,
     activeIcon: FolderKanban
+  })
+
+  // 知识库一级导航：所有登录用户可见，普通用户基于 share_config 权限模型访问个人与组织知识库
+  items.push({
+    name: '知识库',
+    path: '/knowledge',
+    activePaths: ['/knowledge'],
+    icon: Database,
+    activeIcon: Database
   })
 
   items.push({
