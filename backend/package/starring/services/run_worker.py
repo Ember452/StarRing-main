@@ -343,6 +343,7 @@ async def process_agent_run(ctx, run_id: str):
         logger.info(f"Run already terminal, skip: {run_id}, status={run.status}")
         return
 
+    # 解析 run 输入快照（chat / resume 共用同一 payload 结构）
     payload = run.input_payload or {}
     query = payload.get("query")
     resume_input = payload.get("resume")
@@ -354,6 +355,7 @@ async def process_agent_run(ctx, run_id: str):
     request_id = payload.get("request_id")
     thread_id = config.get("thread_id") or payload.get("thread_id")
 
+    # 加载并校验用户（uid 缺失或软删除则直接 failed 终结）
     user = await _load_user(uid)
     if not user:
         await mark_run_terminal(run_id, "failed", "user_not_found", f"user {uid} not found")
@@ -362,6 +364,7 @@ async def process_agent_run(ctx, run_id: str):
     if not request_id:
         request_id = run.request_id
 
+    # 构造 Langfuse 追踪 metadata（含 source / evaluation 用于评测面板筛选）
     meta = {
         "run_id": run_id,
         "request_id": request_id,
@@ -390,7 +393,7 @@ async def process_agent_run(ctx, run_id: str):
         max_chars=LOADING_FLUSH_MAX_CHARS,
     )
     await run_ctx.start()
-    # 将本次数据写入
+    # 写入 metadata 事件，前端 SSE 建连后首先收到本次 run 的元信息
     await append_run_event(
         run_id,
         "metadata",
@@ -404,11 +407,12 @@ async def process_agent_run(ctx, run_id: str):
         },
         thread_id=thread_id,
     )
-    # 一个哨兵标志，追踪是否通通过正常的chunk标记为终结
+    # 哨兵：标记是否已通过 chunk 状态机自然终结（避免下面兜底重复标记）
     terminal_set = False
 
     try:
         async with pg_manager.get_async_session_context() as db:
+            # 根据 run_type 选择流式入口：resume 走中断恢复路径，否则走标准对话
             if run_type == "resume":
                 stream = stream_agent_resume(
                     thread_id=thread_id,
@@ -430,14 +434,16 @@ async def process_agent_run(ctx, run_id: str):
                     save_user_message=False,
                 )
 
+            # 流式消费：_consume_stream_with_cancel 在每个 chunk 间隙检查取消信号
             async for chunk_bytes in _consume_stream_with_cancel(stream, run_ctx):
                 for chunk in _iter_json_chunks(chunk_bytes): # 把字节流解析层json
                     target_thread_id = _chunk_thread_id(chunk, thread_id)
+                    # loading chunk（LLM token 流）走攒批写入，避免每个 token 一次 I/O
                     if chunk.get("status") == "loading":
                         # 追加到writer缓冲区
                         await writer.append(chunk, thread_id=target_thread_id)
                         continue
-                    # 刷新缓存区
+                    # 非 loading chunk 先刷新缓冲区，保证事件顺序
                     await writer.flush(target_thread_id)
                     status = chunk.get("status") or "event"
                     # 把chunk映射为run_event写入
@@ -445,11 +451,13 @@ async def process_agent_run(ctx, run_id: str):
                     if event_type != "end":
                         await append_run_event(run_id, event_type, event_payload, thread_id=target_thread_id)
 
+                    # 子线程 chunk（task 工具委派）只写事件，不参与主 run 状态机
                     if target_thread_id != thread_id:
                         if await run_ctx.is_cancelled():
                             raise asyncio.CancelledError(f"run {run_id} cancelled")
                         continue
 
+                    # 主线程 chunk：根据 status 同步 run 状态机
                     if status == "finished":
                         await mark_run_terminal(run_id, "completed")
                         await _append_end_event(run_id, "completed", thread_id=thread_id, payload={"chunk": chunk})
@@ -464,6 +472,7 @@ async def process_agent_run(ctx, run_id: str):
                         await _append_end_event(run_id, "failed", thread_id=thread_id, payload={"chunk": chunk})
                         terminal_set = True
                     elif status == "interrupted":
+                        # 区分「用户取消」与「LLM 主动中断」：取消信号存在则标 cancelled
                         status_value = "cancelled" if await _is_cancel_requested(run_id) else "interrupted"
                         await mark_run_terminal(
                             run_id,
@@ -474,6 +483,7 @@ async def process_agent_run(ctx, run_id: str):
                         await _append_end_event(run_id, status_value, thread_id=thread_id, payload={"chunk": chunk})
                         terminal_set = True
                     elif status in {"ask_user_question_required", "human_approval_required"}:
+                        # 中断式交互：抽取首个问题作为 error_message，前端据此渲染问询 UI
                         questions = chunk.get("questions") if isinstance(chunk, dict) else None
                         first_question = ""
                         if isinstance(questions, list) and questions:
@@ -490,6 +500,7 @@ async def process_agent_run(ctx, run_id: str):
                         await _append_end_event(run_id, "interrupted", thread_id=thread_id, payload={"chunk": chunk})
                         terminal_set = True
 
+                    # 每个 chunk 处理完后再检查一次取消信号，及时跳出长循环
                     if await run_ctx.is_cancelled():
                         raise asyncio.CancelledError(f"run {run_id} cancelled")
         # 正常流程兜底，手动标记为completed，确保run不会卡在Running

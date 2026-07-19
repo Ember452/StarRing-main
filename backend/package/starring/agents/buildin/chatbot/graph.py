@@ -68,6 +68,7 @@ async def _build_middlewares(context):
         tool_result_offload_token_limit=summary_tool_result_token_limit,
     )
 
+    # 外层中间件：文件系统（带 token 限流 eviction）+ 附件持久化
     middlewares = [
         create_agent_filesystem_middleware(
             getattr(context, "tool_token_limit", DEFAULT_TOOL_RESULT_EVICTION_K_TOKENS) * 1024,
@@ -79,10 +80,13 @@ async def _build_middlewares(context):
     # None（默认）或 True 均挂载，保持其他调用方行为不变。
     if getattr(context, "use_knowledge", None) is not False:
         middlewares.append(KnowledgeBaseMiddleware())
+    # Skills 工具自动发现：从已注册 toolkit 集合中挂载可用工具
     middlewares.append(SkillsMiddleware())
+    # Orchestrator-Worker 子智能体 task 工具：未配置子智能体时返回 None 跳过
     subagent_middleware = await create_subagent_task_middleware(context)
     if subagent_middleware:
         middlewares.append(subagent_middleware)
+    # 内层中间件：摘要压缩 → TodoList → PatchToolCalls → ModelRetry → TokenUsage
     middlewares.extend(
         [
             summary_middleware,

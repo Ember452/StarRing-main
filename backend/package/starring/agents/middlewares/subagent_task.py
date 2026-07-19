@@ -509,10 +509,12 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
 
         async with pg_manager.get_async_session_context() as db:
             repo = AgentRunRepository(db)
+            # 校验父 run 存在且属于当前用户，避免越权创建子 run
             parent_run = await repo.get_run_for_user(parent_run_id, uid)
             if not parent_run:
                 raise ValueError("父运行任务不存在")
 
+            # 续跑场景：校验子线程归属当前对话，且 agent 类型与首次一致（防串线）
             if continuing:
                 previous = await repo.get_latest_subagent_run_by_thread_for_user(child_thread_id, uid)
                 if not previous or previous.conversation_id != parent_run.conversation_id:
@@ -524,11 +526,14 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
                         f"无法继续子智能体线程 {child_thread_id}：该线程属于子智能体 {previous.agent_id or '未知'}"
                     )
 
+            # 幂等键：相同 (parent_run_id, child_thread_id, tool_call_id, agent_slug) 视为同一子 run
             request_id = _subagent_request_id(parent_run_id, child_thread_id, tool_call_id, agent.slug)
             existing = await repo.get_run_by_request_id(request_id)
             if existing:
+                # 已存在则直接复用，返回 (run, created=False) 让调用方走 reused_run 分支
                 return existing, False
 
+            # 首次创建：input_payload 完整快照 description / tool_call_id / 父子线程关系，供后续审计与 langfuse 追踪
             run = await repo.create_run(
                 run_id=str(uuid.uuid4()),
                 thread_id=child_thread_id,

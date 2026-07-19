@@ -233,7 +233,9 @@ async def append_run_stream_event(run_id: str, event_type: str, payload: dict, *
     key = _event_stream_key(run_id)
     now = datetime.now(tz=UTC)
     now_ms = int(now.timestamp() * 1000)
+    # 事件归属的 thread_id：显式传入优先，否则从 payload 推断（兼容旧调用方）
     event_thread_id = thread_id or _payload_thread_id(payload)
+    # 构造统一 envelope：保证前端按 schema_version 解析，跨版本兼容
     envelope = build_run_event_envelope(
         run_id=run_id,
         event_type=event_type,
@@ -247,12 +249,14 @@ async def append_run_stream_event(run_id: str, event_type: str, payload: dict, *
         "ts": str(now_ms),
     }
 
+    # 容量控制：maxlen=0 表示不裁剪；approximate 模式下 Redis 延迟裁剪，吞吐更高
     kwargs = {}
     if RUN_EVENTS_STREAM_MAXLEN > 0:
         kwargs["maxlen"] = RUN_EVENTS_STREAM_MAXLEN # 设置最大有效长度
         kwargs["approximate"] = True # 开启近似模式，Redis不会立即裁剪，允许Stream超过最大长度，性能好
 
     event_id = await redis.xadd(key, fields, **kwargs)
+    # 每次写入后刷新 TTL，保证活跃 run 的 stream 不会被过早回收
     await redis.expire(key, RUN_EVENTS_STREAM_TTL_SECONDS)
     return str(event_id)
 

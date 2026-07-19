@@ -549,6 +549,7 @@ async def stream_agent_run_events(
 
     try:
         while True:
+            # 阶段 1：从 DB 取 run 最新状态（每轮轮询都重新读，及时感知 worker 终结）
             try:
                 async with pg_manager.get_async_session_context() as db:
                     repo = AgentRunRepository(db)
@@ -570,6 +571,7 @@ async def stream_agent_run_events(
                 )
                 return
 
+            # 阶段 2：从 Redis Stream 按 last_seq 游标增量拉取新事件
             try:
                 events = await list_run_stream_events(run_id, after_seq=last_seq, limit=200)
             except Exception as e:
@@ -584,6 +586,7 @@ async def stream_agent_run_events(
                 )
                 return
 
+            # 阶段 3：逐个推送 SSE 事件，遇到 end 标记则本轮后退出
             emitted_terminal = False
             for event in events:
                 seq = str(event.get("seq") or "0-0")
@@ -601,6 +604,7 @@ async def stream_agent_run_events(
             if emitted_terminal:
                 return
 
+            # 阶段 4：兜底补 end —— run 已终结但 stream 没写 end 事件（worker 崩溃等场景）
             if run.status in TERMINAL_RUN_STATUSES and not events:
                 terminal_seq = last_seq
                 if terminal_seq in {"", "0-0"}:
@@ -623,6 +627,7 @@ async def stream_agent_run_events(
                 )
                 return
 
+            # 阶段 5：心跳保活 + 超时退出，避免僵尸 SSE 连接
             now = utc_now_naive()
             elapsed_seconds = (now - started_at).total_seconds()
             heartbeat_elapsed = (now - last_heartbeat_ts).total_seconds()
