@@ -145,6 +145,19 @@ const router = createRouter({
       ]
     },
     {
+      path: '/triggers',
+      name: 'triggers',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'TriggerManagementComp',
+          component: () => import('../views/TriggerManagementView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        }
+      ]
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'NotFound',
       component: () => import('../views/EmptyView.vue'),

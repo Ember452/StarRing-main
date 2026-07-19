@@ -1,4 +1,4 @@
-﻿<script setup>
+<script setup>
 import { ref, onMounted, computed, provide, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { GithubOutlined } from '@ant-design/icons-vue'
@@ -10,7 +10,8 @@ import {
   FolderKanban,
   PanelLeftClose,
   PanelLeftOpen,
-  MessageCirclePlus
+  MessageCirclePlus,
+  AlarmClock
 } from 'lucide-vue-next'
 
 import { useConfigStore } from '@/stores/config'
@@ -152,6 +153,14 @@ const mainList = computed(() => {
     path: '/model-manage',
     icon: Box,
     activeIcon: Box
+  })
+
+  items.push({
+    name: '触发器',
+    path: '/triggers',
+    activePaths: ['/triggers'],
+    icon: AlarmClock,
+    activeIcon: AlarmClock
   })
 
   if (userStore.isAdmin) {
