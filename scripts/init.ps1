@@ -1,4 +1,4 @@
-﻿# starring Initialization Script for PowerShell
+# starring Initialization Script for PowerShell
 # This script helps set up the environment for the starring project
 # Note: API keys will be visible during input - use with care
 
@@ -118,7 +118,7 @@ Write-Host "=========================" -ForegroundColor Cyan
 
 # List of Docker images to pull
 $images = @(
-    "python:3.12-slim",
+    "python:3.13-slim",
     "node:24-slim",
     "node:24-alpine",
     "milvusdb/milvus:v2.5.6",
@@ -149,13 +149,13 @@ foreach ($image in $images) {
 }
 
 $sandboxImage = "enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest"
-Write-Host "🔄 Pulling ${sandboxImage}..." -ForegroundColor Yellow
+Write-Host "🔄 Pulling ${sandboxImage} (optional, only needed for docker sandbox backend)..." -ForegroundColor Yellow
 docker pull $sandboxImage
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✅ Successfully pulled ${sandboxImage}" -ForegroundColor Green
 } else {
-    Write-Host "❌ Failed to pull ${sandboxImage}" -ForegroundColor Red
-    exit 1
+    Write-Host "⚠️ Failed to pull ${sandboxImage}. Sandbox will use memory backend (no real code execution)." -ForegroundColor Yellow
+    Write-Host "   To use real sandbox containers, set SANDBOX_PROVISIONER_BACKEND=docker and ensure the image is available." -ForegroundColor Yellow
 }
 
 Write-Host ""

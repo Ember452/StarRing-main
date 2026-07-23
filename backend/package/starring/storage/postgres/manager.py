@@ -1,4 +1,8 @@
-﻿"""PostgreSQL 数据库管理器 - 支持知识库和业务数据"""
+﻿"""PostgreSQL 数据库管理器 - 支持知识库和业务数据
+提供统一的配置入口，连接管理，LangGraph专用连接
+LangGraph的检查点机制对数据库有特殊的要求，通过LangGraph_pool，向LangGraph提供专用连接，
+负责保存和恢复多轮会话，Agent执行状态
+"""
 
 import json
 import os
@@ -32,6 +36,7 @@ class PostgresManager(metaclass=SingletonMeta):
 
     def __init__(self):
         self.async_engine = None
+        # TODO：修复AsyncSession is not callable error
         self.AsyncSession = None
         self.langgraph_pool = None
         self._initialized = False
@@ -72,7 +77,7 @@ class PostgresManager(metaclass=SingletonMeta):
             # 2. 为 LangGraph 专门初始化一个原生 psycopg_pool
             # ==========================================
             # ⚠️ 注意：psycopg 不认识 "+asyncpg" 这样的 SQLAlchemy 方言标识。
-            # 如果你的 db_url 是 "postgresql+asyncpg://user:pwd@host/db"，
+            # 如果你的 db_url 是 "postgreSql+asyncpg://user:pwd@host/db"，
             # 需要把它清洗成标准的 "postgresql://user:pwd@host/db"
             langgraph_db_url = db_url.replace("+asyncpg", "").replace("+psycopg", "")
 

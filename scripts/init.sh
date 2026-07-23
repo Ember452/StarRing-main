@@ -114,7 +114,7 @@ echo "========================="
 
 # List of Docker images to pull
 images=(
-    "python:3.12-slim"
+    "python:3.13-slim"
     "node:24-slim"
     "node:24-alpine"
     "milvusdb/milvus:v2.5.6"
@@ -138,9 +138,13 @@ for image in "${images[@]}"; do
     fi
 done
 
-echo "🔄 Pulling enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest..."
-docker pull enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
-echo "✅ Successfully pulled enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest"
+echo "🔄 Pulling enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest (optional, only needed for docker sandbox backend)..."
+if docker pull enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest; then
+    echo "✅ Successfully pulled enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest"
+else
+    echo "⚠️  Failed to pull sandbox image. Sandbox will use memory backend (no real code execution)."
+    echo "   To use real sandbox containers, set SANDBOX_PROVISIONER_BACKEND=docker and ensure the image is available."
+fi
 
 echo ""
 echo "🎉 Initialization complete!"

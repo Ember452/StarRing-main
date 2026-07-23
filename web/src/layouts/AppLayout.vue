@@ -88,7 +88,7 @@ const fetchGithubStars = async () => {
   try {
     isLoadingStars.value = true
     // 公共API，可以直接使用fetch
-    const response = await fetch('https://api.github.com/repos/xerrors/starring')
+    const response = await fetch('https://api.github.com/repos/Ember452/starring')
     const data = await response.json()
     githubStars.value = data.stargazers_count
   } catch (error) {
@@ -338,7 +338,7 @@ provide('settingsModal', {
         <div class="github nav-item" @click.stop>
           <a-tooltip placement="right" :open="sidebarCollapsed ? undefined : false">
             <template #title>欢迎 Star</template>
-            <a href="https://github.com/xerrors/starring" target="_blank" class="github-link">
+            <a href="https://github.com/Ember452/starring" target="_blank" class="github-link">
               <GithubOutlined class="icon" />
               <span class="nav-text">GitHub</span>
               <span v-if="githubStars > 0" class="github-stars">

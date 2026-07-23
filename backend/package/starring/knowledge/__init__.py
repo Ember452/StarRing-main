@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 from ..config import config
 from .factory import KnowledgeBaseFactory
@@ -8,7 +8,6 @@ from .implementations.notion import NotionKB
 from .manager import KnowledgeBaseManager
 
 _LITE_MODE = os.environ.get("LITE_MODE", "").lower() in ("true", "1")
-_SKIP_APP_INIT = os.environ.get("STARRING_SKIP_APP_INIT") == "1"
 
 if not _LITE_MODE:
     # 注册知识库类型

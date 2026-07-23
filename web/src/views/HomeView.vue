@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="home-container">
     <!-- 加载中状态 -->
     <div v-if="isLoading" class="loading-container">
@@ -38,7 +38,7 @@
         <div class="header-actions">
           <a
             class="github-link"
-            href="https://github.com/xerrors/starring"
+            href="https://github.com/Ember452/starring"
             target="_blank"
             rel="noopener noreferrer"
             aria-label="GitHub"
@@ -86,7 +86,7 @@
               </button>
               <a
                 class="button-base secondary"
-                href="https://xerrors.github.io/starring/"
+                href="https://ember452.github.io/starring/"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -224,8 +224,8 @@ import {
 const router = useRouter()
 const userStore = useUserStore()
 const infoStore = useInfoStore()
-const repoUrl = 'https://github.com/xerrors/starring'
-const faqUrl = 'https://xerrors.github.io/starring/'
+const repoUrl = 'https://github.com/Ember452/starring'
+const faqUrl = 'https://ember452.github.io/starring/'
 
 // 加载状态
 const isLoading = ref(true)
@@ -237,7 +237,7 @@ let badgeTimer = null
 let subtitleTimer = null
 let starsFetchController = null
 
-const GITHUB_REPO_API = 'https://api.github.com/repos/xerrors/starring'
+const GITHUB_REPO_API = 'https://api.github.com/repos/Ember452/starring'
 const GITHUB_STARS_TIMEOUT = 3000
 
 const formatStars = (count) => {

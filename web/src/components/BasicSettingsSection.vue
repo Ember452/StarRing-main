@@ -193,7 +193,8 @@ const handleContentGuardModelSelect = (spec) => {
 }
 
 const openLink = (url) => {
-  window.open(url, '_blank')
+  const realUrl = url.replace('localhost', window.location.hostname)
+  window.open(realUrl, '_blank')
 }
 </script>
 

@@ -1958,5 +1958,6 @@ async def get_agent_state_view(
         "subagent_run": _serialize_subagent_run(subagent_run),
     }
     if include_messages:
+        # TODO Expected type
         response["messages"] = _serialize_state_messages(child_values)
     return response

@@ -160,6 +160,19 @@
                   <slot name="input-actions-left" :has-active-thread="!!currentChatId"></slot>
                 </template>
                 <template #actions-right-extra>
+                  <a-tooltip
+                    :title="currentUseKnowledge ? '知识库问答：开（回答前强制检索知识库）' : '知识库问答：关（普通问答）'"
+                  >
+                    <button
+                      type="button"
+                      class="kb-toggle-btn"
+                      :class="{ 'is-active': currentUseKnowledge }"
+                      @click="toggleUseKnowledge"
+                    >
+                      <Database :size="14" />
+                      <span>知识库</span>
+                    </button>
+                  </a-tooltip>
                   <div class="input-model-selector">
                     <ModelSelectorComponent
                       :model_spec="currentModelSpec"
@@ -571,6 +584,7 @@ import {
 import { message } from 'ant-design-vue'
 import {
   ChevronDown,
+  Database,
   FolderKanban,
   LayoutList,
   RefreshCw
@@ -973,6 +987,17 @@ const handleModelSelect = (spec) => {
   if (typeof spec === 'string' && spec) {
     selectedModelByThread[currentChatId.value || DRAFT_MODEL_KEY] = spec
   }
+}
+
+// ==================== 对话级“知识库问答”开关 ====================
+// 按线程记忆是否开启知识库问答；默认关闭（普通问答）。
+const useKnowledgeByThread = reactive({})
+const currentUseKnowledge = computed(() =>
+  Boolean(useKnowledgeByThread[currentChatId.value || DRAFT_MODEL_KEY])
+)
+const toggleUseKnowledge = () => {
+  const key = currentChatId.value || DRAFT_MODEL_KEY
+  useKnowledgeByThread[key] = !useKnowledgeByThread[key]
 }
 
 const currentThreadAgentName = computed(() => {
@@ -2319,6 +2344,14 @@ const handleSendMessage = async ({ image } = {}) => {
       }
       delete selectedModelByThread[DRAFT_MODEL_KEY]
     }
+    // 同理迁移草稿态的“知识库问答”开关
+    const draftUseKnowledge = useKnowledgeByThread[DRAFT_MODEL_KEY]
+    if (draftUseKnowledge !== undefined) {
+      if (useKnowledgeByThread[threadId] === undefined) {
+        useKnowledgeByThread[threadId] = draftUseKnowledge
+      }
+      delete useKnowledgeByThread[DRAFT_MODEL_KEY]
+    }
   }
   // 仅当用户显式选择过模型才下发覆盖；否则传 null，由后端使用智能体配置的模型
   const modelSpec = selectedModelByThread[threadId] || null
@@ -2384,7 +2417,8 @@ const handleSendMessage = async ({ image } = {}) => {
       thread_id: threadId,
       meta: {
         request_id: requestId,
-        attachment_file_ids: pendingAttachmentFileIds
+        attachment_file_ids: pendingAttachmentFileIds,
+        use_knowledge: Boolean(useKnowledgeByThread[threadId])
       },
       image_content: imageContent,
       model_spec: modelSpec
@@ -3248,6 +3282,35 @@ watch(currentChatId, (threadId, oldThreadId) => {
     justify-content: center;
     min-width: 0;
     max-width: min(168px, calc(100vw - 160px));
+  }
+
+  .kb-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 28px;
+    padding: 0 10px;
+    margin-right: 6px;
+    font-size: 12px;
+    line-height: 1;
+    color: var(--text-secondary, #666);
+    background: transparent;
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 14px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+
+  .kb-toggle-btn:hover {
+    color: var(--primary-color, #1677ff);
+    border-color: var(--primary-color, #1677ff);
+  }
+
+  .kb-toggle-btn.is-active {
+    color: #fff;
+    background: var(--primary-color, #1677ff);
+    border-color: var(--primary-color, #1677ff);
   }
 
   &.start-screen {

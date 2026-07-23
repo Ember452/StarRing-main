@@ -2,6 +2,10 @@
   <div class="workspace-view layout-container">
     <PageHeader title="工作区" :loading="loadingTree || loadingPreview" :show-border="true">
       <template #actions>
+        <a-button v-if="canViewGraph" @click="openKnowledgeGraph">
+          <Network :size="16" />
+          查看知识图谱
+        </a-button>
         <a-button :disabled="activeSourceKey !== 'personal'" @click="openCreateDirectoryModal">
           新建文件夹
         </a-button>
@@ -156,7 +160,8 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { message, Modal } from 'ant-design-vue'
-import { ChevronLeft, ChevronRight, LibraryBig } from 'lucide-vue-next'
+import { useRouter } from 'vue-router'
+import { ChevronLeft, ChevronRight, LibraryBig, Network } from 'lucide-vue-next'
 import PageHeader from '@/components/shared/PageHeader.vue'
 import AgentFilePreview from '@/components/AgentFilePreview.vue'
 import WorkspaceFileList from '@/components/workspace/WorkspaceFileList.vue'
@@ -179,6 +184,7 @@ import {
 import { normalizePreviewResponse } from '@/utils/file_preview'
 
 const userStore = useUserStore()
+const router = useRouter()
 
 const activeSourceKey = ref('personal')
 const currentPath = ref('/')
@@ -213,6 +219,11 @@ const MAX_WORKSPACE_UPLOAD_FILES = 50
 
 const useInlinePreview = computed(() => workspaceMainWidth.value >= INLINE_PREVIEW_MIN_WIDTH)
 const isKnowledgeSource = computed(() => activeSourceKey.value.startsWith('database:'))
+const canViewGraph = computed(
+  () =>
+    Boolean(selectedDatabase.value?.kb_id) &&
+    String(selectedDatabase.value?.kb_type || '').toLowerCase() === 'milvus'
+)
 const selectedPreviewPath = computed(() =>
   selectedEntry.value?.source === 'knowledge'
     ? selectedEntry.value.name || ''
@@ -476,6 +487,16 @@ const selectDatabase = async (database) => {
   selectedDatabase.value = database
   activeSourceKey.value = `database:${database.kb_id}`
   await loadKnowledgeEntries(database)
+}
+
+const openKnowledgeGraph = () => {
+  const database = selectedDatabase.value
+  if (!database?.kb_id) return
+  router.push({
+    name: 'knowledge-graph',
+    params: { kbId: database.kb_id },
+    query: { name: database.name || '' }
+  })
 }
 
 const openKnowledgeDirectory = async (entry) => {

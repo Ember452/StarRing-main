@@ -1,4 +1,4 @@
-﻿x-api-worker-env: &api-worker-env
+x-api-worker-env: &api-worker-env
   HOST_IP: ${HOST_IP:-}
   LITE_MODE: ${LITE_MODE:-false}
   RUNNING_IN_DOCKER: "true"
@@ -39,7 +39,7 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
-    image: starring-api:${STARRING_VERSION:-0.7.1.dev0}
+    image: starring-api:${STARRING_VERSION:-0.1.0}
     container_name: api-dev
     working_dir: /app
     volumes:
@@ -87,7 +87,7 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
-    image: starring-api:${STARRING_VERSION:-0.7.1.dev0}
+    image: starring-api:${STARRING_VERSION:-0.1.0}
     container_name: worker-dev
     working_dir: /app
     volumes:
@@ -126,7 +126,7 @@ services:
     build:
       context: ./docker/sandbox_provisioner
       dockerfile: Dockerfile
-    image: starring-sandbox-provisioner:${STARRING_VERSION:-0.7.1.dev0}
+    image: starring-sandbox-provisioner:${STARRING_VERSION:-0.1.0}
     container_name: sandbox-provisioner
     volumes:
       - ./docker/volumes/starring:/app/saves
@@ -180,7 +180,7 @@ services:
       context: .
       dockerfile: docker/web.Dockerfile
       target: development
-    image: starring-web:${STARRING_VERSION:-0.7.1.dev0}
+    image: starring-web:${STARRING_VERSION:-0.1.0}
     container_name: web-dev
     volumes:
       - ./web/src:/app/src

@@ -1,4 +1,4 @@
-﻿name: Publish starring-cli
+name: Publish starring-cli
 
 on:
   release:
@@ -32,7 +32,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Install dependencies
         run: uv sync --group test

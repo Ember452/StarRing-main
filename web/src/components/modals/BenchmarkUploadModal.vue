@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <a-modal
     v-model:open="visible"
     title="上传评估基准"
@@ -41,7 +41,7 @@
           需要了解评估基准格式？查看
           <a
             class="benchmark-help-link"
-            href="https://xerrors.github.io/starring/intro/evaluation.html"
+            href="https://ember452.github.io/starring/intro/evaluation.html"
             target="_blank"
             rel="noopener noreferrer"
           >

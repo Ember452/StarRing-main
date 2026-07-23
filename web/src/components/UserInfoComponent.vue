@@ -136,7 +136,7 @@ const goToLogin = () => {
 }
 
 const openDocs = () => {
-  window.open('https://xerrors.github.io/starring/', '_blank', 'noopener,noreferrer')
+  window.open('https://ember452.github.io/starring/', '_blank', 'noopener,noreferrer')
 }
 
 const toggleTheme = () => {

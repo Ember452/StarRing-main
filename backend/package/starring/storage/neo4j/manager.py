@@ -16,13 +16,15 @@ _shared_neo4j_connection_lock = threading.Lock()
 
 
 def safe_neo4j_label(value: str) -> str:
+    """检查并返回一个安全的 Neo4j 标签。"""
     if not _SAFE_NEO4J_LABEL_RE.match(value or ""):
         raise ValueError(f"非法 Neo4j 标签: {value}")
     return value
 
 
 def neo4j_write(driver, query: Callable) -> Any:
-    """在写事务中执行 Cypher 操作的简写。"""
+    """在写事务中执行 Cypher 操作的简写。
+    Cypher是图数据库中的查询语言"""
     with driver.session() as session:
         return session.execute_write(query)
 
@@ -44,6 +46,9 @@ class Neo4jConnectionManager:
         self._connect()
 
     def _connect(self):
+        """
+        连接neo4j
+        """
         if self.driver and self._is_connected():
             return
 
@@ -82,6 +87,7 @@ class Neo4jConnectionManager:
 
 
 def get_shared_neo4j_connection() -> Neo4jConnectionManager:
+    """获取共享的 Neo4j 连接管理器。"""
     global _shared_neo4j_connection
     if _shared_neo4j_connection is None or not _shared_neo4j_connection.driver:
         with _shared_neo4j_connection_lock:

@@ -71,6 +71,7 @@ class KnowledgeChunkRepository:
             return list(result.scalars().all())
 
     async def list_by_chunk_ids(self, chunk_ids: list[str]) -> list[KnowledgeChunk]:
+
         if not chunk_ids:
             return []
         async with pg_manager.get_async_session_context() as session:
@@ -79,6 +80,10 @@ class KnowledgeChunkRepository:
             return [chunks_by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in chunks_by_id]
 
     async def batch_upsert(self, chunks: list[dict[str, Any]]) -> list[KnowledgeChunk]:
+        """批量插入或者更新
+        TODO:非原子性，如果在查询和更新之间其他事务修改了，可能导致更新丢失，根据业务场景考虑加锁或者数据库原生语句
+        TODO:无字段白名单，所有字段都会被覆盖
+        """
         if not chunks:
             return []
 

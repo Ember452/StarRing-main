@@ -22,6 +22,8 @@ from starring.utils import logger
 
 
 def _get_knowledge_base():
+    """延迟导入，避免循环依赖（如果 starring.knowledge_base依赖当前模块，在顶部会导致循环依赖
+    减少启动开销，封装依赖细节"""
     from starring import knowledge_base
 
     return knowledge_base
@@ -197,7 +199,7 @@ def _find_query_target(
         return None, None, f"知识库资源 '{normalized_kb_id}' 不存在"
     return target_info, normalized_kb_id, None
 
-
+# category：把工具归类，方便按类型选择。tags：给工具打上中文标签。args_schema：指定工具接收的输入结构
 @tool(category="knowledge", tags=["知识库"], args_schema=QueryKBInput)
 async def query_kb(kb_id: str, query_text: str, file_name: str | None = None, runtime: ToolRuntime = None) -> Any:
     """在指定知识库中检索内容

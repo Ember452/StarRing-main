@@ -12,6 +12,10 @@ TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
 
 
 class AgentRunRepository:
+    """
+    这是一个 Agent 运行记录的数据访问层（Repository / DAO），
+    封装了对 agent_runs 表的全部数据库操作。它负责追踪一次 Agent 执行从创建到结束的完整生命周期。
+    """
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
 
@@ -65,6 +69,7 @@ class AgentRunRepository:
         resume_request_id: str | None = None,
         checkpoint_thread_id: str | None = None,
     ) -> AgentRun:
+        """创建一个运行状态"""
         run = AgentRun(
             id=run_id,
             thread_id=thread_id,
@@ -80,8 +85,8 @@ class AgentRunRepository:
             input_payload=input_payload or {},
             status="pending",
         )
-        self.db.add(run)
-        await self.db.flush()
+        self.db.add(run) # 表名这个是新增记录，仅内存操作
+        await self.db.flush() # 把所有pending对象提交到数据库执行insert，但此时事务还没提交，其他数据库连接看不到
         return run
 
     async def set_input_message(self, run_id: str, message_id: int) -> AgentRun | None:
@@ -148,5 +153,8 @@ class AgentRunRepository:
         return run
 
     async def _lock_run(self, run_id: str) -> AgentRun | None:
-        result = await self.db.execute(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
+        result = await self.db.execute(select(AgentRun)
+                                       .where(AgentRun.id == run_id)
+                                        # 得不到快速返回
+                                       .with_for_update(skip_locked=True))
         return result.scalar_one_or_none()

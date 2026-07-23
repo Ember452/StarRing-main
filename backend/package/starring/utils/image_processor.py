@@ -75,7 +75,7 @@ class ImageProcessor:
             logger.error(f"图片处理失败: {str(e)}")
             return {"success": False, "error": str(e)}
 
-    def _validate_image_format(self, image_data: bytes) -> tuple[str, str]:
+    def _validate_image_format(self, image_data: bytes) -> tuple[str | None, str]:
         """验证图片格式并返回格式信息"""
         try:
             with Image.open(io.BytesIO(image_data)) as img:

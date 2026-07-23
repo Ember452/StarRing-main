@@ -340,16 +340,19 @@ class BaseAgent:
             metadata: 可选的 langfuse 元数据字典。
             tags: 可选的 langfuse 标签列表。
         """
+        # ── 1. 初始化上下文与图 ──
         context = self.context_schema()
         context.update_from_dict(input_context or {})
         graph = await self.get_graph(context=context)
         logger.debug(f"stream_with_state: {context=}")
 
+        # ── 2. 构建 langgraph 运行配置 ──
         input_config = {
             "configurable": {"thread_id": context.thread_id, "uid": context.uid},
             "recursion_limit": _recursion_limit_from_context(context, DEFAULT_MAX_EXECUTION_STEPS),
         }
 
+        # 可选注入 langfuse 观测回调
         if callbacks := kwargs.get("callbacks"):
             input_config["callbacks"] = list(callbacks)
         if metadata := kwargs.get("metadata"):
@@ -357,6 +360,7 @@ class BaseAgent:
         if tags := kwargs.get("tags"):
             input_config["tags"] = list(tags)
 
+        # ── 3. 启动 v3 事件流，并行开启子智能体路由收集 ──
         run = await graph.astream_events(
             # TODO 警告：Unexpected type
             graph_input,
@@ -364,10 +368,14 @@ class BaseAgent:
             config=input_config,
             version="v3",
         )
+        # 子智能体路由表：namespace → {subagent_uid, subagent_name, ...}
         subagent_routes: dict[tuple[str, ...], dict[str, str]] = {}
         route_task = asyncio.create_task(_collect_subagent_routes(run, context.thread_id, subagent_routes))
+
+        # ── 4. 遍历事件流，按事件类型分别处理并 yield ──
         try:
             async for event in run:
+                # 解析事件通用字段
                 params = event.get("params") or {}
                 namespace = list(params.get("namespace") or [])
                 method = event.get("method")
@@ -375,6 +383,7 @@ class BaseAgent:
                 subagent_route = _subagent_route_for_namespace(subagent_routes, namespace)
 
                 if method == "messages":
+                    # ① 增量消息事件：注入 namespace / thread_id / 子智能体路由信息
                     msg, metadata = data
                     metadata = dict(metadata or {})
                     actual_thread_id = (
@@ -388,8 +397,10 @@ class BaseAgent:
                         metadata["thread_id"] = actual_thread_id
                     yield "messages", (msg, metadata)
                 elif method == "values" and not namespace:
+                    # ② 顶层状态快照：仅根图（namespace 为空），直接透传
                     yield "values", data
                 elif method in {"tasks", "tools", "lifecycle"}:
+                    # ③ 自定义事件：tasks / tools（需规范化）/ lifecycle
                     if method == "tools":
                         data = _normalize_tool_event_data(data)
                     event_payload = {
@@ -404,6 +415,7 @@ class BaseAgent:
                         event_payload["thread_id"] = actual_thread_id
                     yield "stream_event", event_payload
         finally:
+            # ── 5. 无论正常结束还是异常，确保取消路由收集协程 ──
             route_task.cancel()
             with suppress(asyncio.CancelledError):
                 await route_task

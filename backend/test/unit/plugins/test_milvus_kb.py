@@ -1,12 +1,7 @@
-﻿import asyncio
-import types
+import asyncio
 
 import pytest
-import starring
 from pymilvus import CollectionSchema, DataType, FieldSchema, Function, FunctionType
-
-if "knowledge_base" not in vars(starring):
-    starring.knowledge_base = types.SimpleNamespace()
 
 from starring.knowledge.base import FileStatus
 from starring.knowledge.chunking.ragflow_like.nlp import count_tokens

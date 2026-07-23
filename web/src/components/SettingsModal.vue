@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <a-modal
     v-model:open="visible"
     :title="null"
@@ -80,7 +80,7 @@
               <X :size="14" />
             </button>
           </div>
-          <p class="star-card-title">给 starring 点个 Star</p>
+          <p class="star-card-title">给 StarRing 点个 Star</p>
           <p class="star-card-description">
             如果这个项目帮到了你，欢迎去 GitHub 点亮一个 Star，让更多人看到它。
           </p>
@@ -92,7 +92,7 @@
           >
             <img
               class="star-card-link-image"
-              src="https://img.shields.io/github/stars/xerrors/starring?label=starring&style=social"
+              src="https://img.shields.io/github/stars/Ember452/starring?label=starring&style=social"
               alt="GitHub stars for starring"
             />
             <ExternalLink :size="13" />
@@ -209,7 +209,7 @@ const activeTab = ref('account')
 const showStarCard = ref(true)
 
 const STAR_CARD_STORAGE_KEY = 'starring-settings-star-card-dismissed'
-const projectRepoUrl = 'https://github.com/xerrors/starring'
+const projectRepoUrl = 'https://github.com/Ember452/starring'
 
 const visible = computed({
   get: () => props.visible,

@@ -1,8 +1,8 @@
-﻿<template>
+<template>
   <main class="cli-auth-view">
     <section class="cli-auth-panel">
       <div class="cli-auth-header">
-        <p class="eyebrow">starring CLI</p>
+        <p class="eyebrow">StarRing CLI</p>
         <h1>确认命令行登录</h1>
       </div>
 
@@ -29,7 +29,7 @@
           <dl>
             <div>
               <dt>凭据名称</dt>
-              <dd>{{ session?.key_name || 'starring CLI' }}</dd>
+              <dd>{{ session?.key_name || 'StarRing CLI' }}</dd>
             </div>
             <div>
               <dt>状态</dt>

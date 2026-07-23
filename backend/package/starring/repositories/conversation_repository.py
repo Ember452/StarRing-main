@@ -17,6 +17,7 @@ MAX_CONVERSATION_TITLE_LENGTH = 255
 
 
 class ConversationRepository:
+    """是一个数据访问层，用来处理与对话相关的所有数据库操作，封装了业务逻辑与数据库之间的交互"""
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
 
@@ -121,7 +122,7 @@ class ConversationRepository:
 
         await self.db.commit()
         await self.db.refresh(message)
-
+        # 每次添加消息，更新对话统计信息TODO在消息量大时可能成为性能瓶颈，可以考虑用触发器或者批量更新
         await self._update_message_count(conversation_id)
 
         logger.debug(f"Added {role} message to conversation {conversation_id}")

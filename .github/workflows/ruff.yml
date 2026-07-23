@@ -46,7 +46,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       # 4. 安装 ruff 依赖（根据项目配置，ruff 在 dev 依赖组中）
       - name: Install dependencies

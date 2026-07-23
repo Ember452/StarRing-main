@@ -123,6 +123,7 @@ class _BackendScope:
     readable_skills: list[str]
     file_thread_id: str
     skills_thread_id: str
+    model_spec: str | None = None
 
     @classmethod
     def from_runtime(cls, runtime) -> _BackendScope:
@@ -136,10 +137,11 @@ class _BackendScope:
             state if isinstance(state, dict) else {},
             readable_skills_source=context,
             error_context="runtime configurable context",
+            model=getattr(context, "model", None),
         )
 
     @classmethod
-    def from_sources(cls, *sources, readable_skills_source, error_context: str) -> _BackendScope:
+    def from_sources(cls, *sources, readable_skills_source, error_context: str, model: str | None = None) -> _BackendScope:
         def string_value(key: str) -> str | None:
             for source in sources:
                 value = source.get(key) if isinstance(source, dict) else getattr(source, key, None)
@@ -162,6 +164,7 @@ class _BackendScope:
             readable_skills=normalize_string_list(selected if isinstance(selected, list) else []),
             file_thread_id=string_value("file_thread_id") or thread_id,
             skills_thread_id=string_value("skills_thread_id") or thread_id,
+            model_spec=model,
         )
 
     def create_backend(self) -> CompositeBackend:
@@ -172,6 +175,7 @@ class _BackendScope:
                 readable_skills=self.readable_skills,
                 file_thread_id=self.file_thread_id,
                 skills_thread_id=self.skills_thread_id,
+                model_spec=self.model_spec,
             ),
             routes={
                 "/skills/": SelectedSkillsReadonlyBackend(selected_slugs=self.readable_skills),
@@ -195,6 +199,7 @@ def create_agent_filesystem_middleware(
             context,
             readable_skills_source=context,
             error_context="runtime context",
+            model=getattr(context, "model", None),
         ).create_backend()
     middleware = StarRingFilesystemMiddleware(
         backend=backend,

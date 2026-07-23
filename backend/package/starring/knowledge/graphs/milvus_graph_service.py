@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import json
@@ -191,6 +191,51 @@ class MilvusGraphService:
         return config
 
     async def build_pending_chunks(self, kb_id: str, *, batch_size: int, context=None) -> dict[str, Any]:
+        """
+        批量构建知识图谱
+
+        整体流程（外层 while 循环逐批处理，内层 worker 并发执行）：
+
+        while 还有待处理的 chunk:
+           从 DB 取出 batch_size 个 graph_indexed=false 的 chunk
+           放入 asyncio.Queue
+           启动 worker_count 个并发 worker:
+              对每个 chunk:
+                  ① LLM 抽取 (_get_chunk_extraction_result)
+                     ├── 检查 chunk.extraction_result 缓存 → 有则复用
+                     ├── 无则调用 extractor.extract(chunk.content)
+                     │   └── LLMGraphExtractor 发送 prompt 到 LLM
+                     │       要求返回 JSON: {relations: [{source: {text,label,attributes},
+                     │                                   target: {text,label,attributes},
+                     │                                   text, label}]}
+                     ├── normalize_extraction_result() 标准化 & 校验
+                     └── 写入 chunk.extraction_result 缓存
+
+                  ② 写入 Neo4j（同步，通过写锁串行化 write_chunk_graph）
+                     ├── build_graph_payload() → 同一 chunk 内实体去重合并
+                     ├── _build_entity_records() / _build_triple_records()
+                     │   ├── entity_id = hash(kb_id:normalized_name:label)    [compute_entity_id]
+                     │   └── triple_id = hash(kb_id:source:label:rel:target:label)  [compute_triple_id]
+                     └── neo4j_write:
+                         ├── MERGE Chunk 节点（标签: Chunk:MilvusKB:{kb_id}）
+                         ├── MERGE Entity 节点 + MENTIONS 边（Chunk→Entity）
+                         └── MERGE Entity→Entity RELATION 边
+
+                  ③ 同步到 Postgres (graph_repo.upsert_chunk_graph)
+                     ├── INSERT ... ON CONFLICT DO UPDATE  (entity)
+                     ├── INSERT ... ON CONFLICT DO NOTHING (entity_mention)
+                     └── INSERT ... ON CONFLICT DO UPDATE  (triple + triple_mention)
+
+                  ④ 向量化存入 Milvus (graph_vector_store.insert_missing_graph_records)
+                     ├── 对 entity.content & triple.content 做 embedding
+                     ├── 存入 {kb_id}_entity  collection（含 BM25 稀疏索引）
+                     └── 存入 {kb_id}_triple collection
+
+                  ⑤ 标记完成 (chunk_repo.mark_graph_indexed)
+                     └── graph_indexed = true, ent_ids = [...]
+
+              进度回调 context.set_progress()
+        """
         kb = await self._get_milvus_kb(kb_id)
         config = self._get_locked_config(kb.additional_params or {})
         extractor_options = self._runtime_extractor_options(config)
@@ -200,20 +245,25 @@ class MilvusGraphService:
         processed = 0
         failed = 0
         failed_chunk_ids: set[str] = set()
-        write_lock = asyncio.Lock()
+        write_lock = asyncio.Lock()  # 串行化 Neo4j + PG + Milvus 写入，避免并发冲突
 
+        # while 还有待处理的 chunk:
         while True:
             if context is not None:
                 await context.raise_if_cancelled()
+
+            # 从 DB 取出 batch_size 个 graph_indexed=false 的 chunk
             chunks = await self.chunk_repo.list_graph_pending_by_kb_id(kb_id, batch_size)
             unprocessed = [c for c in chunks if c.chunk_id not in failed_chunk_ids]
             if not unprocessed:
                 break
 
+            # 放入 asyncio.Queue
             queue: asyncio.Queue[Any] = asyncio.Queue()
             for chunk in unprocessed:
                 queue.put_nowait(chunk)
 
+            # 启动 worker_count 个并发 worker:
             async def worker() -> None:
                 nonlocal processed, failed
                 while True:
@@ -224,7 +274,21 @@ class MilvusGraphService:
                     except asyncio.QueueEmpty:
                         return
                     try:
+                        # ── ① LLM 抽取 ──
+                        # 检查 chunk.extraction_result 缓存 → 有则复用
+                        # 无则调用 extractor.extract(chunk.content) → 标准化 & 校验
+                        # 写入 chunk.extraction_result 缓存
                         extraction_result = await self._get_chunk_extraction_result(kb_id, chunk, extractor)
+
+                        # ── ② 写入 Neo4j（同步，通过写锁串行化）──
+                        # build_graph_payload() → 同一 chunk 内实体去重合并
+                        # _build_entity_records() / _build_triple_records()
+                        #   entity_id = hash(kb_id:normalized_name:label)    [compute_entity_id]
+                        #   triple_id = hash(kb_id:source:label:rel:target:label)  [compute_triple_id]
+                        # neo4j_write:
+                        #   MERGE Chunk 节点（标签: Chunk:MilvusKB:{kb_id}）
+                        #   MERGE Entity 节点 + MENTIONS 边（Chunk→Entity）
+                        #   MERGE Entity→Entity RELATION 边
                         async with write_lock:
                             entities, triples = await asyncio.to_thread(
                                 self.write_chunk_graph,
@@ -232,6 +296,11 @@ class MilvusGraphService:
                                 chunk,
                                 extraction_result,
                             )
+
+                            # ── ③ 同步到 Postgres ──
+                            # INSERT ... ON CONFLICT DO UPDATE  (entity)
+                            # INSERT ... ON CONFLICT DO NOTHING (entity_mention)
+                            # INSERT ... ON CONFLICT DO UPDATE  (triple + triple_mention)
                             await self.graph_repo.upsert_chunk_graph(
                                 kb_id=kb_id,
                                 file_id=chunk.file_id,
@@ -239,12 +308,20 @@ class MilvusGraphService:
                                 entities=entities,
                                 triples=triples,
                             )
+
+                            # ── ④ 向量化存入 Milvus ──
+                            # 对 entity.content & triple.content 做 embedding
+                            # 存入 {kb_id}_entity  collection（含 BM25 稀疏索引）
+                            # 存入 {kb_id}_triple collection
                             await self.graph_vector_store.insert_missing_graph_records(
                                 kb_id=kb_id,
                                 embedding_model_spec=kb.embedding_model_spec,
                                 entities=entities,
                                 triples=triples,
                             )
+
+                            # ── ⑤ 标记完成 ──
+                            # graph_indexed = true, ent_ids = [...]
                             await self.chunk_repo.mark_graph_indexed(
                                 chunk.chunk_id,
                                 ent_ids=[entity["entity_id"] for entity in entities],
@@ -257,6 +334,7 @@ class MilvusGraphService:
                     finally:
                         queue.task_done()
 
+                    # 进度回调 context.set_progress()
                     if context is not None:
                         completed = processed + failed
                         progress = 5.0 + min(90.0, completed / max(total_pending, 1) * 90.0)

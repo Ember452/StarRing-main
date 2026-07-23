@@ -249,17 +249,18 @@
 
     <div class="send-button-container">
       <slot name="actions-right"></slot>
-      <a-tooltip :title="isLoading ? '停止回答' : ''">
-        <a-button
-          @click="handleSendOrStop"
-          :disabled="sendButtonDisabled"
-          type="link"
+      <a-tooltip :title="isLoading ? '点击停止回答' : ''">
+        <button
+          type="button"
           class="send-button"
+          :class="{ 'is-loading': isLoading, 'is-empty': isEmptyInput }"
+          :disabled="isSendButtonDisabled"
+          @click="handleSendOrStop"
         >
-          <template #icon>
-            <component :is="getIcon" class="send-btn" />
-          </template>
-        </a-button>
+          <LoadingOutlined v-if="isLoading" class="send-btn-icon spin" />
+          <component :is="getIcon" v-else class="send-btn-icon" />
+          <span class="send-btn-text">{{ buttonText }}</span>
+        </button>
       </a-tooltip>
     </div>
 
@@ -281,7 +282,12 @@ import {
   h,
   render
 } from 'vue'
-import { SendOutlined, ArrowUpOutlined, PauseOutlined } from '@ant-design/icons-vue'
+import {
+  SendOutlined,
+  ArrowUpOutlined,
+  PauseOutlined,
+  LoadingOutlined
+} from '@ant-design/icons-vue'
 import { Paperclip } from 'lucide-vue-next'
 import { searchMentionFiles } from '@/apis/mention_api'
 import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
@@ -1017,6 +1023,21 @@ const inputValue = computed({
   set: (val) => emit('update:modelValue', val)
 })
 
+// 空输入校验：无文本内容时按钮灰度降级
+const isEmptyInput = computed(() => {
+  const val = (inputValue.value || '').trim()
+  return !val
+})
+
+// 发送按钮禁用条件：loading 时保持可点击（用于停止），其余情况空输入或父组件禁用均禁用
+const isSendButtonDisabled = computed(() => {
+  if (props.isLoading) return false
+  return props.sendButtonDisabled || isEmptyInput.value
+})
+
+// 按钮文案：loading 时为「停止」，其余为「发送」
+const buttonText = computed(() => (props.isLoading ? '停止' : '发送'))
+
 const handleMentionDeletion = (e) => {
   if (e.key !== 'Backspace' && e.key !== 'Delete') return false
 
@@ -1217,12 +1238,26 @@ defineExpose({
   width: 100%;
   margin: 0 auto;
   border: 1px solid var(--gray-150);
-  border-radius: 0.8rem;
-  box-shadow: 0 2px 8px var(--shadow-1);
-  transition: all 0.3s ease;
-  background: var(--gray-0);
+  border-radius: 1.4rem;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.04),
+    0 2px 8px var(--shadow-1);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  // 背景：浅色=白色72%，暗色=#1f1f1f 72%（暗色自动适配，避免白底突兀）
+  background: color-mix(in srgb, var(--color-bg-container) 72%, transparent);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
   gap: 0px;
   position: relative;
+
+  // 聚焦态：柔和外发光渐变动画，无生硬闪烁
+  &:focus-within {
+    border-color: var(--main-400);
+    box-shadow:
+      inset 0 1px 2px rgba(0, 0, 0, 0.04),
+      0 0 0 4px color-mix(in srgb, var(--main-500) 15%, transparent),
+      0 4px 16px var(--shadow-2);
+  }
 
   /* Default: Multi-line layout with top/bottom slots */
   padding: 0.8rem 0.75rem 0.6rem 0.75rem;
@@ -1258,12 +1293,6 @@ defineExpose({
   .bottom-slot {
     grid-column: 1 / -1;
   }
-
-  // &:focus-within {
-  //   border-color: var(--main-500);
-  //   background: var(--gray-0);
-  //   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  // }
 }
 
 .expand-options {
@@ -1428,38 +1457,88 @@ defineExpose({
   }
 }
 
-.send-button.ant-btn-icon-only {
-  height: 32px;
-  width: 32px;
-  cursor: pointer;
-  background-color: var(--main-500);
-  border-radius: 50%;
-  border: none;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 6px var(--shadow-2);
-  color: var(--gray-0);
-  padding: 0;
-  display: flex;
+// 发送按钮：胶囊形 + 渐变填充 + 图标+文字 + loading 转圈 + 空输入灰度
+.send-button {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  gap: 6px;
+  height: 34px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 17px;
+  cursor: pointer;
+  color: var(--gray-0);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  background: linear-gradient(135deg, var(--main-500) 0%, var(--main-700) 100%);
+  box-shadow: 0 4px 12px rgba(4, 106, 130, 0.25);
+  transition:
+    background 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease,
+    opacity 0.2s ease;
+  user-select: none;
+  line-height: 1;
 
-  &:hover {
-    background-color: var(--main-color);
-    box-shadow: 0 4px 8px var(--shadow-3);
-    color: var(--gray-0);
+  .send-btn-icon {
+    font-size: 14px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
   }
 
-  &:active {
-    box-shadow: 0 2px 4px var(--shadow-2);
-    // 移除点击动画效果
+  .send-btn-text {
+    line-height: 1;
   }
 
-  &:disabled {
+  // 父组件禁用（非空输入被外部禁用）：保留渐变色但半透明
+  &:disabled:not(.is-empty):not(.is-loading) {
     opacity: 0.5;
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
+  }
+
+  &:hover:not(:disabled):not(.is-empty):not(.is-loading) {
+    background: linear-gradient(135deg, var(--main-600) 0%, var(--main-800) 100%);
+    box-shadow: 0 6px 16px rgba(4, 106, 130, 0.35);
+    transform: translateY(-1px);
+  }
+
+  &:active:not(:disabled):not(.is-empty):not(.is-loading) {
+    transform: translateY(0);
+    box-shadow: 0 2px 6px rgba(4, 106, 130, 0.25);
+  }
+
+  // loading 状态：深灰渐变 + 图标转圈，仍可点击以触发停止
+  &.is-loading {
+    background: linear-gradient(135deg, var(--gray-700) 0%, var(--gray-900) 100%);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+
+    .send-btn-icon.spin {
+      animation: send-btn-spin 0.8s linear infinite;
+    }
+  }
+
+  // 空输入校验：灰度 + 降低透明度，hover 无反馈
+  &.is-empty {
+    background: var(--gray-200);
+    color: var(--gray-500);
+    box-shadow: none;
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+@keyframes send-btn-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 

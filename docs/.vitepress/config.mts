@@ -1,4 +1,4 @@
-﻿import { defineConfig } from 'vitepress'
+import { defineConfig } from 'vitepress'
 import markdownItTaskCheckbox from 'markdown-it-task-checkbox'
 
 
@@ -40,6 +40,12 @@ export default defineConfig({
         ]
       },
       {
+        text: '项目亮点',
+        items: [
+          { text: '技术选型文档', link: '/project-highlights/技术选型文档/' }
+        ]
+      },
+      {
         text: '智能体开发',
         items: [
           { text: '智能体配置', link: '/agents/agents-config' },
@@ -77,7 +83,7 @@ export default defineConfig({
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/xerrors/StarRing' }
+      { icon: 'github', link: 'https://github.com/Ember452/StarRing' }
     ],
 
     footer: {
@@ -86,7 +92,7 @@ export default defineConfig({
     },
 
     editLink: {
-      pattern: 'https://github.com/xerrors/StarRing/edit/main/docs/:path',
+      pattern: 'https://github.com/Ember452/StarRing/edit/main/docs/:path',
       text: '在 GitHub 上编辑此页'
     },
 

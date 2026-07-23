@@ -1,4 +1,4 @@
-﻿"""Unified parser module for markdown conversion."""
+"""Unified parser module for markdown conversion."""
 
 from __future__ import annotations
 
@@ -13,8 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
-from docling.datamodel.base_models import InputFormat
-from docling.document_converter import DocumentConverter
 from langchain_community.document_loaders import PyPDFLoader
 from markdownify import markdownify as md_convert
 
@@ -58,13 +56,34 @@ class MarkdownParseResult:
     artifacts: dict[str, Any] = field(default_factory=dict)
 
 
-_docling_converter: DocumentConverter | None = None
+_docling_converter = None
+_docling_available: bool | None = None
 
 
-def _get_docling_converter() -> DocumentConverter:
-    """获取 Docling 文档转换器单例。"""
+def _check_docling_available() -> bool:
+    """检查 docling 是否可用。"""
+    global _docling_available
+    if _docling_available is None:
+        try:
+            from docling.datamodel.base_models import InputFormat  # noqa: F401
+            from docling.document_converter import DocumentConverter  # noqa: F401
+
+            _docling_available = True
+        except ImportError:
+            _docling_available = False
+            logger.info("docling 未安装，DOCX/XLSX/PPTX 将使用轻量解析器。安装方式: pip install starring[docling]")
+    return _docling_available
+
+
+def _get_docling_converter():
+    """获取 Docling 文档转换器单例（延迟导入）。"""
     global _docling_converter
     if _docling_converter is None:
+        if not _check_docling_available():
+            raise ImportError("docling 未安装。安装方式: pip install starring[docling]")
+        from docling.datamodel.base_models import InputFormat
+        from docling.document_converter import DocumentConverter
+
         _docling_converter = DocumentConverter(
             format_options={
                 InputFormat.DOCX: None,
@@ -190,6 +209,77 @@ def _convert_docx_with_python_docx(file_path: Path) -> str:
         for row in rows[1:]:
             normalized_row = row + [""] * (len(header) - len(row))
             blocks.append(f"| {' | '.join(normalized_row[: len(header)])} |")
+
+        blocks.append("")
+
+    return "\n\n".join(blocks).strip()
+
+
+def _convert_xlsx_with_openpyxl(file_path: Path) -> str:
+    """使用 openpyxl 解析 XLSX 为 Markdown。"""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(file_path), read_only=True, data_only=True)
+    blocks: list[str] = []
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        blocks.append(f"## {sheet_name}")
+
+        rows: list[list[str]] = []
+        for row in ws.iter_rows(values_only=True):
+            cells = [str(c).strip() if c is not None else "" for c in row]
+            if any(cells):
+                rows.append(cells)
+
+        if not rows:
+            blocks.append("(空工作表)")
+            continue
+
+        header = rows[0]
+        blocks.append(f"| {' | '.join(header)} |")
+        blocks.append(f"| {' | '.join(['---'] * len(header))} |")
+
+        for row in rows[1:]:
+            normalized_row = row + [""] * (len(header) - len(row))
+            blocks.append(f"| {' | '.join(normalized_row[: len(header)])} |")
+
+        blocks.append("")
+
+    wb.close()
+    return "\n\n".join(blocks).strip()
+
+
+def _convert_pptx_with_python_pptx(file_path: Path) -> str:
+    """使用 python-pptx 解析 PPTX 为 Markdown。"""
+    from pptx import Presentation
+
+    prs = Presentation(str(file_path))
+    blocks: list[str] = []
+
+    for i, slide in enumerate(prs.slides, 1):
+        blocks.append(f"## 幻灯片 {i}")
+
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                text = shape.text_frame.text.strip()
+                if text:
+                    blocks.append(text)
+
+            if shape.has_table:
+                table = shape.table
+                rows: list[list[str]] = []
+                for row in table.rows:
+                    cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+                    rows.append(cells)
+
+                if rows:
+                    header = rows[0]
+                    blocks.append(f"| {' | '.join(header)} |")
+                    blocks.append(f"| {' | '.join(['---'] * len(header))} |")
+                    for row in rows[1:]:
+                        normalized_row = row + [""] * (len(header) - len(row))
+                        blocks.append(f"| {' | '.join(normalized_row[: len(header)])} |")
 
         blocks.append("")
 
@@ -325,14 +415,24 @@ async def _process_file_to_markdown_core(
             result = f"{content}"
 
         elif file_ext == ".docx":
-            try:
-                result = _convert_with_docling(file_path_obj, params=params)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"Docling 解析 DOCX 失败，回退到 python-docx: {file_path_obj.name}, {e}")
+            if _check_docling_available():
+                try:
+                    result = _convert_with_docling(file_path_obj, params=params)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Docling 解析 DOCX 失败，回退到 python-docx: {file_path_obj.name}, {e}")
+                    result = _convert_docx_with_python_docx(file_path_obj)
+            else:
                 result = _convert_docx_with_python_docx(file_path_obj)
 
         elif file_ext == ".pptx":
-            result = _convert_with_docling(file_path_obj, params=params)
+            if _check_docling_available():
+                try:
+                    result = _convert_with_docling(file_path_obj, params=params)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Docling 解析 PPTX 失败，回退到 python-pptx: {file_path_obj.name}, {e}")
+                    result = _convert_pptx_with_python_pptx(file_path_obj)
+            else:
+                result = _convert_pptx_with_python_pptx(file_path_obj)
 
         elif file_ext == ".doc":
             from langchain_community.document_loaders import UnstructuredWordDocumentLoader
@@ -365,7 +465,14 @@ async def _process_file_to_markdown_core(
             result = markdown_content.strip()
 
         elif file_ext in [".xls", ".xlsx"]:
-            result = _convert_with_docling(file_path_obj, params=params)
+            if _check_docling_available():
+                try:
+                    result = _convert_with_docling(file_path_obj, params=params)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Docling 解析 XLSX 失败，回退到 openpyxl: {file_path_obj.name}, {e}")
+                    result = _convert_xlsx_with_openpyxl(file_path_obj)
+            else:
+                result = _convert_xlsx_with_openpyxl(file_path_obj)
 
         elif file_ext == ".json":
             import json

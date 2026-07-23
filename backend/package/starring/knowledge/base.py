@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import mimetypes
 import os
 import re
@@ -961,15 +961,18 @@ class KnowledgeBase(ABC):
             await kb_repo.delete(kb_id)
             await self._save_metadata()
 
-        # 删除工作目录
+        # 删除工作目录（IO 操作，通过 to_thread 避免阻塞事件循环）
         working_dir = os.path.join(self.work_dir, kb_id)
         if os.path.exists(working_dir):
             import shutil
 
-            try:
-                shutil.rmtree(working_dir)
-            except Exception as e:
-                logger.error(f"Error deleting working directory {working_dir}: {e}")
+            def _rmtree(path: str):
+                try:
+                    shutil.rmtree(path)
+                except Exception as e:
+                    logger.error(f"Error deleting working directory {path}: {e}")
+
+            await asyncio.to_thread(_rmtree, working_dir)
 
         return {"message": "删除成功"}
 

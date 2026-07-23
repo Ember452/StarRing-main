@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>StarRing 星环 - Mockup v2</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #060418;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    color: #fff;
+  }
+  #stage { position: fixed; inset: 0; }
+  canvas { position: absolute; inset: 0; display: block; }
+
+  /* 背景星云雾气 */
+  .nebula {
+    position: fixed; inset: 0; pointer-events: none; z-index: 1;
+    background:
+      radial-gradient(ellipse 60% 50% at 50% 50%, rgba(76, 41, 132, 0.35), transparent 70%),
+      radial-gradient(ellipse 40% 30% at 30% 40%, rgba(40, 80, 160, 0.18), transparent 60%),
+      radial-gradient(ellipse 50% 40% at 70% 65%, rgba(120, 60, 180, 0.15), transparent 65%),
+      radial-gradient(ellipse 30% 25% at 50% 50%, rgba(252, 194, 27, 0.08), transparent 70%);
+  }
+
+  .hero-overlay {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
+    text-align: center; pointer-events: none;
+  }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 16px; border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 216, 155, 0.9);
+    font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
+    margin-bottom: 28px;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  }
+  .hero-badge::before {
+    content: ''; width: 5px; height: 5px; border-radius: 50%;
+    background: #FCC21B;
+    box-shadow: 0 0 10px #FCC21B, 0 0 20px rgba(252, 194, 27, 0.5);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .hero-title {
+    font-size: 68px; font-weight: 300; letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #FFE8B8 0%, #FCC21B 35%, #C79BFF 75%, #9D4EDD 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 18px;
+    line-height: 1.1;
+  }
+  .hero-title b { font-weight: 600; }
+  .hero-subtitle {
+    font-size: 16px; color: rgba(255, 255, 255, 0.5);
+    margin-bottom: 40px; letter-spacing: 0.04em; font-weight: 300;
+  }
+  .hero-actions { display: flex; gap: 14px; pointer-events: auto; }
+  .btn {
+    padding: 11px 28px; border-radius: 999px;
+    font-size: 14px; cursor: pointer; transition: all 0.25s ease;
+    border: none; font-weight: 500; letter-spacing: 0.02em;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, rgba(252, 194, 27, 0.95), rgba(240, 165, 0, 0.95));
+    color: #1a0f00;
+    box-shadow: 0 4px 24px rgba(252, 194, 27, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  }
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 32px rgba(252, 194, 27, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  }
+  .btn-secondary {
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+  }
+  .btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .mockup-label {
+    position: fixed; top: 20px; left: 20px;
+    padding: 7px 12px; border-radius: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 216, 155, 0.7); font-size: 11px; z-index: 100;
+    font-family: ui-monospace, 'SF Mono', monospace;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    backdrop-filter: blur(8px);
+  }
+  .hint {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    color: rgba(255, 255, 255, 0.25); font-size: 11px; z-index: 100;
+    letter-spacing: 0.18em; text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="bg"></canvas>
+  <canvas id="rings"></canvas>
+</div>
+<div class="nebula"></div>
+<div class="hero-overlay">
+  <div class="hero-badge">StarRing · Intelligent Knowledge</div>
+  <h1 class="hero-title">StarRing <b>星环</b></h1>
+  <p class="hero-subtitle">融合 RAG 与知识图谱的智能体开发平台</p>
+  <div class="hero-actions">
+    <button class="btn btn-primary">开始体验</button>
+    <button class="btn btn-secondary">查看文档</button>
+  </div>
+</div>
+<div class="mockup-label">MOCKUP · v2</div>
+<div class="hint">移动鼠标查看视差</div>
+
+<script>
+// ============ 画布初始化 ============
+const bgCanvas = document.getElementById('bg');
+const bgCtx = bgCanvas.getContext('2d');
+const ringsCanvas = document.getElementById('rings');
+const ringsCtx = ringsCanvas.getContext('2d');
+
+let W, H, cx, cy, dpr;
+let mouseX = 0, mouseY = 0;
+let targetMouseX = 0, targetMouseY = 0;
+
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  cx = W / 2;
+  cy = H / 2;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  [bgCanvas, ringsCanvas].forEach(c => {
+    c.width = W * dpr;
+    c.height = H * dpr;
+    c.style.width = W + 'px';
+    c.style.height = H + 'px';
+    c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+  });
+}
+window.addEventListener('resize', resize);
+resize();
+
+window.addEventListener('mousemove', (e) => {
+  targetMouseX = (e.clientX - cx) / cx;
+  targetMouseY = (e.clientY - cy) / cy;
+});
+
+// ============ 背景星点（更精致） ============
+const stars = [];
+for (let i = 0; i < 90; i++) {
+  stars.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    size: Math.pow(Math.random(), 2) * 1.6 + 0.2,
+    baseAlpha: Math.random() * 0.5 + 0.15,
+    phase: Math.random() * Math.PI * 2,
+    speed: Math.random() * 1.2 + 0.4,
+    color: Math.random() < 0.15 ? '#FFE8B8' : (Math.random() < 0.5 ? '#ffffff' : '#E0D4FF')
+  });
+}
+
+function drawBg(t) {
+  bgCtx.clearRect(0, 0, W, H);
+  for (const s of stars) {
+    const alpha = s.baseAlpha + Math.sin(t * s.speed + s.phase) * 0.25;
+    const a = Math.max(0, Math.min(1, alpha));
+    bgCtx.globalAlpha = a;
+    bgCtx.fillStyle = s.color;
+    bgCtx.beginPath();
+    bgCtx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+    bgCtx.fill();
+    // 较大的星点带十字光芒
+    if (s.size > 1.2) {
+      bgCtx.globalAlpha = a * 0.3;
+      bgCtx.strokeStyle = s.color;
+      bgCtx.lineWidth = 0.5;
+      bgCtx.beginPath();
+      bgCtx.moveTo(s.x - s.size * 4, s.y);
+      bgCtx.lineTo(s.x + s.size * 4, s.y);
+      bgCtx.moveTo(s.x, s.y - s.size * 4);
+      bgCtx.lineTo(s.x, s.y + s.size * 4);
+      bgCtx.stroke();
+    }
+  }
+  bgCtx.globalAlpha = 1;
+}
+
+// ============ 椭圆环（4 层 + 粒子拖尾） ============
+// 颜色：深紫为主，金色高光，青色微点缀
+const rings = [
+  { rx: 160, ry: 60,  rot: -18 * Math.PI / 180, count: 22, hueA: 45,  hueB: 45,  dir: 1,  speed: 0.0024, parallax: 0.40, alpha: 0.95, size: 1.2 },
+  { rx: 260, ry: 100, rot:  10 * Math.PI / 180, count: 30, hueA: 280, hueB: 260, dir: -1, speed: 0.0018, parallax: 0.25, alpha: 0.75, size: 1.0 },
+  { rx: 380, ry: 150, rot:  -6 * Math.PI / 180, count: 40, hueA: 270, hueB: 300, dir: 1,  speed: 0.0013, parallax: 0.15, alpha: 0.55, size: 0.9 },
+  { rx: 520, ry: 200, rot:  14 * Math.PI / 180, count: 55, hueA: 250, hueB: 290, dir: -1, speed: 0.0009, parallax: 0.08, alpha: 0.35, size: 0.8 }
+];
+
+// 把粒子分配到环上
+const particles = [];
+rings.forEach((ring, ri) => {
+  for (let i = 0; i < ring.count; i++) {
+    particles.push({
+      ring: ri,
+      t: (i / ring.count) * Math.PI * 2 + Math.random() * 0.05,
+      sizeMod: Math.random() * 0.6 + 0.7,
+      alphaMod: Math.random() * 0.4 + 0.6,
+      hueOffset: Math.random() * 20 - 10
+    });
+  }
+});
+
+function hsla(h, s, l, a) {
+  return `hsla(${h}, ${s}%, ${l}%, ${a})`;
+}
+
+function drawRings(t) {
+  // 拖尾淡化（深空背景色）
+  ringsCtx.fillStyle = 'rgba(6, 4, 24, 0.22)';
+  ringsCtx.fillRect(0, 0, W, H);
+
+  const px = mouseX * 25;
+  const py = mouseY * 25;
+  const centerX = cx + px * 0.3;
+  const centerY = cy + py * 0.3;
+
+  // 极淡的轨道线（几乎不可见，仅做空间引导）
+  rings.forEach((ring) => {
+    const rpx = px * ring.parallax;
+    const rpy = py * ring.parallax;
+    ringsCtx.save();
+    ringsCtx.translate(centerX + rpx, centerY + rpy);
+    ringsCtx.rotate(ring.rot);
+    const trackAlpha = ring.alpha * 0.06;
+    const grad = ringsCtx.createLinearGradient(-ring.rx, 0, ring.rx, 0);
+    grad.addColorStop(0, hsla(ring.hueA, 70, 60, trackAlpha));
+    grad.addColorStop(0.5, hsla((ring.hueA + ring.hueB) / 2, 70, 65, trackAlpha * 1.2));
+    grad.addColorStop(1, hsla(ring.hueB, 70, 60, trackAlpha));
+    ringsCtx.strokeStyle = grad;
+    ringsCtx.lineWidth = 0.8;
+    ringsCtx.beginPath();
+    ringsCtx.ellipse(0, 0, ring.rx, ring.ry, 0, 0, Math.PI * 2);
+    ringsCtx.stroke();
+    ringsCtx.restore();
+  });
+
+  // 粒子（带运动拖尾）
+  for (const p of particles) {
+    const ring = rings[p.ring];
+    p.t += ring.speed * ring.dir * 60; // 速度归一化（按 60fps）
+
+    const rpx = px * ring.parallax;
+    const rpy = py * ring.parallax;
+
+    // 当前位置
+    const localX = Math.cos(p.t) * ring.rx;
+    const localY = Math.sin(p.t) * ring.ry;
+    const cos = Math.cos(ring.rot);
+    const sin = Math.sin(ring.rot);
+    const x = centerX + rpx + localX * cos - localY * sin;
+    const y = centerY + rpy + localX * sin + localY * cos;
+
+    // 拖尾位置（沿运动方向反向取一段）
+    const trailLen = 0.08; // 拖尾长度（参数空间）
+    const tBack = p.t - trailLen * ring.dir;
+    const localXB = Math.cos(tBack) * ring.rx;
+    const localYB = Math.sin(tBack) * ring.ry;
+    const xBack = centerX + rpx + localXB * cos - localYB * sin;
+    const yBack = centerY + rpy + localXB * sin + localYB * cos;
+
+    // 颜色（基于角度做金紫渐变）
+    const hueT = (Math.sin(p.t + p.hueOffset * 0.01) + 1) / 2;
+    const hue = ring.hueA + (ring.hueB - ring.hueA) * hueT;
+    // 内环偏金色（45），其他环偏紫色
+    const finalHue = p.ring === 0 ? 45 + p.hueOffset : hue;
+    const sat = p.ring === 0 ? 95 : 75;
+    const light = 65 + p.alphaMod * 15;
+
+    // 拖尾（线性渐变）
+    const trailGrad = ringsCtx.createLinearGradient(xBack, yBack, x, y);
+    trailGrad.addColorStop(0, hsla(finalHue, sat, light, 0));
+    trailGrad.addColorStop(1, hsla(finalHue, sat, light, ring.alpha * p.alphaMod * 0.8));
+    ringsCtx.strokeStyle = trailGrad;
+    ringsCtx.lineWidth = ring.size * p.sizeMod;
+    ringsCtx.lineCap = 'round';
+    ringsCtx.beginPath();
+    ringsCtx.moveTo(xBack, yBack);
+    ringsCtx.lineTo(x, y);
+    ringsCtx.stroke();
+
+    // 粒子核心（小亮点）
+    ringsCtx.fillStyle = hsla(finalHue, sat, 85, ring.alpha * p.alphaMod);
+    ringsCtx.beginPath();
+    ringsCtx.arc(x, y, ring.size * p.sizeMod * 0.9, 0, Math.PI * 2);
+    ringsCtx.fill();
+  }
+
+  // 中心：小核心 + 大柔和光晕
+  const pulse = 1 + Math.sin(t * 1.2) * 0.08;
+  const coreR = 6 * pulse;
+  const haloR = 120 * pulse;
+
+  // 外层光晕（柔和）
+  const haloGrad = ringsCtx.createRadialGradient(centerX, centerY, 0, centerX, centerY, haloR);
+  haloGrad.addColorStop(0, 'rgba(252, 194, 27, 0.18)');
+  haloGrad.addColorStop(0.3, 'rgba(157, 78, 221, 0.10)');
+  haloGrad.addColorStop(0.7, 'rgba(76, 41, 132, 0.04)');
+  haloGrad.addColorStop(1, 'rgba(76, 41, 132, 0)');
+  ringsCtx.fillStyle = haloGrad;
+  ringsCtx.beginPath();
+  ringsCtx.arc(centerX, centerY, haloR, 0, Math.PI * 2);
+  ringsCtx.fill();
+
+  // 内层亮光
+  const innerGrad = ringsCtx.createRadialGradient(centerX, centerY, 0, centerX, centerY, coreR * 4);
+  innerGrad.addColorStop(0, 'rgba(255, 232, 184, 0.95)');
+  innerGrad.addColorStop(0.3, 'rgba(252, 194, 27, 0.6)');
+  innerGrad.addColorStop(1, 'rgba(252, 194, 27, 0)');
+  ringsCtx.fillStyle = innerGrad;
+  ringsCtx.beginPath();
+  ringsCtx.arc(centerX, centerY, coreR * 4, 0, Math.PI * 2);
+  ringsCtx.fill();
+
+  // 核心实点
+  ringsCtx.fillStyle = '#FFFAEC';
+  ringsCtx.beginPath();
+  ringsCtx.arc(centerX, centerY, coreR * 0.5, 0, Math.PI * 2);
+  ringsCtx.fill();
+}
+
+function loop(ts) {
+  const t = ts / 1000;
+  mouseX += (targetMouseX - mouseX) * 0.05;
+  mouseY += (targetMouseY - mouseY) * 0.05;
+  drawBg(t);
+  drawRings(t);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

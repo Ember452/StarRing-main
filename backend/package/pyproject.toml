@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "starring"
-version = "0.7.1.dev0"
+version = "0.1.0"
 description = "starring 智能知识库与知识图谱平台核心后端包"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"

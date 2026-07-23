@@ -1,4 +1,4 @@
-﻿# 使用轻量级Python基础镜像
+# 使用轻量级Python基础镜像
 FROM python:3.13-slim
 COPY --from=ghcr.io/astral-sh/uv:0.7.2 /uv /uvx /bin/
 COPY --from=node:24-slim /usr/local/bin /usr/local/bin
@@ -15,6 +15,7 @@ ENV TZ=Asia/Shanghai \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_PREFERENCE=only-system \
     UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    UV_HTTP_TIMEOUT=300 \
     DEBIAN_FRONTEND=noninteractive
 
 # 设置 npm 镜像源，为 MCP 和 Skills 安装依赖

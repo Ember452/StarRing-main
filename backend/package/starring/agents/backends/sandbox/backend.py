@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 from datetime import datetime
@@ -40,6 +40,46 @@ _OUTPUTS_ROOT = f"{_USER_DATA_ROOT}/{OUTPUTS_DIR_NAME}"
 _SKILLS_ROOT = "/" + VIRTUAL_SKILLS_PATH.strip("/")
 _READABLE_ROOTS = (_USER_DATA_ROOT, _SKILLS_ROOT)
 _WRITABLE_ROOTS = (_WORKSPACE_ROOT, _OUTPUTS_ROOT)
+
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".svg"})
+
+# 已知支持视觉输入的模型名称模式（litellm.supports_vision 对部分模型不准确，作为补充）
+_KNOWN_VISION_MODEL_PATTERNS = (
+    "gpt-4o", "gpt-4-turbo", "gpt-4-vision", "gpt-4o-mini",
+    "claude-3", "claude-sonnet", "claude-opus", "claude-haiku",
+    "gemini-1.5", "gemini-2", "gemini-pro-vision",
+    "qwen-vl", "qwen2-vl", "qwen2.5-vl",
+    "glm-4v", "glm-4.5v",
+    "internvl", "intern-vl",
+    "llava", "pixtral",
+)
+
+
+def _model_supports_vision(model_spec: str | None) -> bool:
+    """检查当前模型是否支持图片输入。
+
+    优先使用 litellm.supports_vision，对 litellm 未覆盖的模型用名称模式补充。
+    未知模型默认放行（返回 True），避免误拦有能力处理图片的模型。
+    """
+    if not model_spec:
+        return True
+
+    # 从 spec（provider_id:model_id）中提取 model_id
+    model_id = model_spec.split(":", 1)[-1] if ":" in model_spec else model_spec
+    model_lower = model_id.lower()
+
+    # 先用已知模式匹配（覆盖 litellm 遗漏的模型）
+    for pattern in _KNOWN_VISION_MODEL_PATTERNS:
+        if pattern in model_lower:
+            return True
+
+    # 再用 litellm 检查
+    try:
+        import litellm
+
+        return litellm.supports_vision(model_id)
+    except Exception:
+        return True
 
 
 def _normalize_path(path: str) -> str:
@@ -171,6 +211,7 @@ class ProvisionerSandboxBackend(BaseSandbox):
         readable_skills: list[str] | None = None,
         file_thread_id: str | None = None,
         skills_thread_id: str | None = None,
+        model_spec: str | None = None,
     ):
         self._thread_id = str(thread_id or "").strip()
         if not self._thread_id:
@@ -186,6 +227,7 @@ class ProvisionerSandboxBackend(BaseSandbox):
             raise ValueError("uid is required for ProvisionerSandboxBackend")
 
         self._readable_skills = list(readable_skills or [])
+        self._model_spec = model_spec
         self._provider = get_sandbox_provider()
         self._id = sandbox_id_for_thread(self._file_thread_id, self._skills_thread_id, uid=self._uid)
         self._client: Any | None = None
@@ -277,6 +319,19 @@ class ProvisionerSandboxBackend(BaseSandbox):
             return ReadResult(error=error.removeprefix("Error: "))
 
         if _looks_like_binary(content):
+            # 检查是否为图片文件：若当前模型不支持图片输入，返回友好提示而非 base64 数据
+            ext = PurePosixPath(normalized_path).suffix.lower()
+            if ext in _IMAGE_EXTENSIONS and not _model_supports_vision(self._model_spec):
+                return ReadResult(
+                    file_data={
+                        "content": (
+                            f"[图片文件: {file_path}]\n"
+                            f"当前模型不支持图片输入，无法直接查看图片内容。\n"
+                            f"请使用 OCR 工具或命令（如 `tesseract {file_path} output`）提取图片中的文字。"
+                        ),
+                        "encoding": "utf-8",
+                    }
+                )
             return ReadResult(file_data={"content": base64.b64encode(content).decode("ascii"), "encoding": "base64"})
 
         return ReadResult(file_data={"content": content.decode("utf-8"), "encoding": "utf-8"})

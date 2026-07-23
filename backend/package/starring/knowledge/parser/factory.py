@@ -49,7 +49,6 @@ class DocumentProcessorFactory:
 
         Args:
             processor_type: 处理器类型
-                - "rapid_ocr": RapidOCR 本地 OCR
                 - "mineru_ocr": MinerU HTTP API 文档解析
                 - "mineru_official": MinerU 官方云服务 API 文档解析
                 - "pp_structure_v3_ocr": PP-Structure-V3 版面解析

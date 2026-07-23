@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <a-modal v-model:open="visible" title="添加文件" width="800px" @cancel="handleCancel">
     <template #footer>
       <div class="footer-container">
@@ -1394,7 +1394,7 @@ const getAuthHeaders = () => {
 
 const openDocLink = () => {
   window.open(
-    'https://xerrors.github.io/starring/advanced/document-processing.html',
+    'https://ember452.github.io/starring/advanced/document-processing.html',
     '_blank',
     'noopener'
   )

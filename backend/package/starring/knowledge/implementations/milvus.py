@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import os
 import time
 import traceback
@@ -1314,24 +1314,31 @@ class MilvusKB(KnowledgeBase):
 
         return {**basic_info, **content_info}
 
-    def delete_database(self, kb_id: str) -> dict:
-        """删除数据库，同时清除Milvus中的集合"""
-        # Drop Milvus collection
-        try:
-            if utility.has_collection(kb_id, using=self.connection_alias):
-                utility.drop_collection(kb_id, using=self.connection_alias)
-                logger.info(f"Dropped Milvus collection for {kb_id}")
-            else:
-                logger.info(f"Milvus collection {kb_id} does not exist, skipping")
-        except Exception as e:
-            logger.error(f"Failed to drop Milvus collection {kb_id}: {e}")
+    async def delete_database(self, kb_id: str) -> dict:
+        """删除数据库，同时清除Milvus中的集合与Neo4j图谱数据"""
+        # 同步操作，通过 to_thread 避免阻塞事件循环
+        def _drop_milvus_collections():
+            try:
+                if utility.has_collection(kb_id, using=self.connection_alias):
+                    utility.drop_collection(kb_id, using=self.connection_alias)
+                    logger.info(f"Dropped Milvus collection for {kb_id}")
+                else:
+                    logger.info(f"Milvus collection {kb_id} does not exist, skipping")
+            except Exception as e:
+                logger.error(f"Failed to drop Milvus collection {kb_id}: {e}")
 
-        from starring.knowledge.graphs.milvus_graph_vector_store import MilvusGraphVectorStore
+            # 清理 Neo4j 图谱数据与 Milvus 图谱集合，避免知识库删除后图谱残留
+            try:
+                from starring.knowledge.graphs.milvus_graph_service import MilvusGraphService
 
-        MilvusGraphVectorStore().drop_graph_collections(kb_id)
+                MilvusGraphService().delete_graph(kb_id)
+            except Exception as e:
+                logger.error(f"Failed to delete graph data for {kb_id}: {e}")
+
+        await asyncio.to_thread(_drop_milvus_collections)
 
         # Call base method to delete local files and metadata
-        return super().delete_database(kb_id)
+        return await super().delete_database(kb_id)
 
     def get_query_params_config(self, kb_id: str, **kwargs) -> dict:
         """获取 Milvus 知识库的查询参数配置"""
