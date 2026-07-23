@@ -132,7 +132,7 @@ class ChatbotAgent(BaseAgent):
         if getattr(context, "use_knowledge", None) is True:
             system_prompt = f"{system_prompt}\n{KB_FORCE_PROMPT}"
         graph = create_agent(
-            # FIXME：警告 Unexpected type
+            # TODO：警告 Unexpected type
             model=load_chat_model(fully_specified_name=model_spec), # 智能体使用的大语言模型
             tools=await resolve_configured_runtime_tools(context), # 智能体使用的工具
             system_prompt=system_prompt, # 智能体使用的系统提示

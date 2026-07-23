@@ -272,6 +272,7 @@ async def create_agent_run(
     current_user: User = Depends(get_required_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """ 接收请求，校验身份，解析参数，调用服务层"""
     return await create_agent_run_view(
         query=payload.query,
         agent_id=payload.agent_id,

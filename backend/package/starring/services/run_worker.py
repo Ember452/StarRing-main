@@ -138,10 +138,11 @@ class ChunkedEventWriter:
             for target_thread_id in list(self.thread_buffers):
                 await self.flush(target_thread_id)
             return
-
+        # TODO Expected type 'str | None' (matched generic type '_KT'), got 'str | None | object' instead
         buffer = self.thread_buffers.get(thread_id)
         if not buffer or not buffer.items:
             return
+        # TODOExpected type 'str | None', got 'str | None | object' instead
         await append_run_event(self.run_id, "messages", {"items": buffer.items}, thread_id=thread_id)
         buffer.items = []
         buffer.chars = 0
@@ -356,6 +357,7 @@ async def process_agent_run(ctx, run_id: str):
     thread_id = config.get("thread_id") or payload.get("thread_id")
 
     # 加载并校验用户（uid 缺失或软删除则直接 failed 终结）
+    # TODO Expected type 'str', got 'Any | None' instead
     user = await _load_user(uid)
     if not user:
         await mark_run_terminal(run_id, "failed", "user_not_found", f"user {uid} not found")
@@ -415,6 +417,7 @@ async def process_agent_run(ctx, run_id: str):
             # 根据 run_type 选择流式入口：resume 走中断恢复路径，否则走标准对话
             if run_type == "resume":
                 stream = stream_agent_resume(
+                    # TODO Expected type 'str', got 'Any | None' instead
                     thread_id=thread_id,
                     resume_input=resume_input,
                     meta=meta,
@@ -424,8 +427,8 @@ async def process_agent_run(ctx, run_id: str):
             else:
                 # 返回一个异步生成器，产出对AI的响应
                 stream = stream_agent_chat(
-                    query=query,
-                    agent_id=config.get("agent_id") or agent_id,
+                    query=query, # TODO Expected type 'str', got 'Any | None' instead
+                    agent_id=config.get("agent_id") or agent_id, # TODO Expected type 'str', got 'Any | None' instead
                     thread_id=thread_id,
                     meta=meta,
                     image_content=image_content,

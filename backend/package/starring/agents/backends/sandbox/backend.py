@@ -323,6 +323,7 @@ class ProvisionerSandboxBackend(BaseSandbox):
             ext = PurePosixPath(normalized_path).suffix.lower()
             if ext in _IMAGE_EXTENSIONS and not _model_supports_vision(self._model_spec):
                 return ReadResult(
+                    # TODO：expected type
                     file_data={
                         "content": (
                             f"[图片文件: {file_path}]\n"
