@@ -427,14 +427,20 @@ const databaseSubtitle = computed(() => {
 
 const tabs = computed(() => {
   if (isMilvus.value) {
-    return [
+    const items = [
       { key: 'filetable', label: '文件管理', icon: FileText },
       { key: 'query', label: '检索测试', icon: Search },
       { key: 'graph', label: '知识图谱', icon: Network },
-      { key: 'mindmap', label: '知识导图', icon: MapIcon },
-      { key: 'evaluation', label: 'RAG 评估', icon: BarChart3 },
-      { key: 'benchmarks', label: '评估基准', icon: ClipboardList }
+      { key: 'mindmap', label: '知识导图', icon: MapIcon }
     ]
+    // RAG 评估相关接口（evaluation_router）仍为 admin-only，普通用户隐藏入口避免 403
+    if (userStore.isSuperAdmin || userStore.isAdmin) {
+      items.push(
+        { key: 'evaluation', label: 'RAG 评估', icon: BarChart3 },
+        { key: 'benchmarks', label: '评估基准', icon: ClipboardList }
+      )
+    }
+    return items
   }
 
   return [{ key: 'query', label: '检索测试', icon: Search }]
@@ -750,11 +756,12 @@ const fileList = computed(() => {
 
 const canEditShareConfig = computed(() => userStore.isSuperAdmin || userStore.isAdmin)
 
-// 管理类操作（编辑/上传/删除）权限：当前后端 update/delete/upload 等接口仍为 admin-only，
-// 故普通用户即使为知识库 owner 也只能只读浏览，避免点击管理按钮后接口 403 报错。
-// 后续如需放开 owner 管理自己知识库的能力，需要同步放宽后端相关端点权限。
+// 管理类操作（编辑/上传/删除）权限：管理员，或知识库 owner（created_by 本人），
+// 与后端 _require_kb_manager 的校验规则保持一致。
+// 注意：共享设置（share_config）仍仅限管理员修改，见 canEditShareConfig。
 const canManageDatabase = computed(() => {
-  return userStore.isSuperAdmin || userStore.isAdmin
+  if (userStore.isSuperAdmin || userStore.isAdmin) return true
+  return isCurrentDatabaseLoaded.value && database.value?.created_by === userStore.uid
 })
 
 const shareConfigDisplay = computed(() => {
@@ -840,12 +847,16 @@ const handleEditSubmit = () => {
         }
       }
 
-      const formConfig = shareConfigFormRef.value?.config || { access_level: 'global' }
       const updateData = {
         name: editForm.name,
         description: editForm.description,
-        additional_params: {},
-        share_config: {
+        additional_params: {}
+      }
+
+      // 共享设置仅管理员可改：owner 提交时不带 share_config，避免后端 403
+      if (canEditShareConfig.value && shareConfigFormRef.value) {
+        const formConfig = shareConfigFormRef.value.config
+        updateData.share_config = {
           access_level: formConfig.access_level,
           department_ids:
             formConfig.access_level === 'department' ? formConfig.department_ids || [] : [],
