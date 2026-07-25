@@ -30,6 +30,8 @@ RUN_CANCEL_KEY_TTL_SECONDS = int(os.getenv("RUN_CANCEL_KEY_TTL_SECONDS", "1800")
 RUN_EVENTS_STREAM_TTL_SECONDS = int(os.getenv("RUN_EVENTS_STREAM_TTL_SECONDS", "7200"))
 RUN_EVENTS_STREAM_MAXLEN = int(os.getenv("RUN_EVENTS_STREAM_MAXLEN", "0"))
 RUN_CANCEL_CHANNEL = os.getenv("RUN_CANCEL_CHANNEL", "run:cancel:ch")
+# 子智能体 run 专用 ARQ 队列：与主队列隔离，避免父 run 等待子 run 时耗尽 worker 池死锁
+SUBAGENT_QUEUE_NAME = os.getenv("SUBAGENT_QUEUE_NAME", "arq:queue:subagent")
 
 _redis_client = None
 _arq_pool = None

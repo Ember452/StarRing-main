@@ -774,6 +774,7 @@ class AgentRun(Base):
     checkpoint_thread_id = Column(String(64), nullable=True, comment="LangGraph checkpoint thread ID")
     last_event_id = Column(String(64), nullable=True, comment="Last Redis stream event ID")
     input_payload = Column(JSON, nullable=False, default=dict, comment="Original input payload")
+    output_payload = Column(JSON, nullable=True, comment="Terminal output payload (e.g. subagent deliverable)")
     error_type = Column(String(64), nullable=True, comment="Error type")
     error_message = Column(Text, nullable=True, comment="Error message")
     started_at = Column(DateTime, nullable=True, comment="Start time")
@@ -799,6 +800,7 @@ class AgentRun(Base):
             "checkpoint_thread_id": self.checkpoint_thread_id,
             "last_event_id": self.last_event_id,
             "input_payload": self.input_payload or {},
+            "output_payload": self.output_payload,
             "error_type": self.error_type,
             "error_message": self.error_message,
             "started_at": format_utc_datetime(self.started_at),

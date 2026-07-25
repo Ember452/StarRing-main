@@ -142,6 +142,7 @@ class AgentRunRepository:
         status: str,
         error_type: str | None = None,
         error_message: str | None = None,
+        output_payload: dict | None = None,
     ) -> AgentRun | None:
         run = await self._lock_run(run_id)
         if not run:
@@ -151,6 +152,8 @@ class AgentRunRepository:
         run.status = status
         run.error_type = error_type
         run.error_message = error_message
+        if output_payload is not None:
+            run.output_payload = output_payload
         run.finished_at = utc_now_naive()
         run.updated_at = run.finished_at
         await self.db.flush()

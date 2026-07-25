@@ -145,7 +145,7 @@ class ChunkedEventWriter:
         buffer = self.thread_buffers.get(thread_id)
         if not buffer or not buffer.items:
             return
-        # TODOExpected type 'str | None', got 'str | None | object' instead
+        # TODO Expected type 'str | None', got 'str | None | object' instead
         await append_run_event(self.run_id, "messages", {"items": buffer.items}, thread_id=thread_id)
         buffer.items = []
         buffer.chars = 0
@@ -478,7 +478,7 @@ async def process_agent_run(ctx, run_id: str):
 
             # 流式消费：_consume_stream_with_cancel 在每个 chunk 间隙检查取消信号
             async for chunk_bytes in _consume_stream_with_cancel(stream, run_ctx):
-                for chunk in _iter_json_chunks(chunk_bytes):  # 把字节流解析层json
+                for chunk in _iter_json_chunks(chunk_bytes):  # 把字节流解析成json
                     target_thread_id = _chunk_thread_id(chunk, thread_id)
                     # loading chunk（LLM token 流）走攒批写入，避免每个 token 一次 I/O
                     if chunk.get("status") == "loading":
