@@ -82,7 +82,8 @@ export function useAgentStreamHandler({
   processApprovalInStream,
   currentAgentId,
   supportsFiles,
-  streamSmoother
+  streamSmoother,
+  onSubagentRunEvent = null
 }) {
   const debugPrefix = '[AgentStateDebug]'
   /**
@@ -93,6 +94,18 @@ export function useAgentStreamHandler({
    */
   const handleStreamChunk = (chunk, threadId) => {
     const { status, msg, request_id, message: chunkMessage } = chunk
+
+    // 子智能体 chunk 自带 subagent_tool_call_id 与子线程 id：直接上报建立映射/更新状态，
+    // 优先于前端哈希推算 child_thread_id（推算逻辑保留作兼容）。
+    if (onSubagentRunEvent && chunk.subagent_tool_call_id) {
+      onSubagentRunEvent({
+        toolCallId: String(chunk.subagent_tool_call_id),
+        childThreadId: chunk.thread_id ? String(chunk.thread_id) : '',
+        status: status === 'subagent_run_status' ? String(chunk.subagent_run_status || '') : '',
+        errorMessage: chunk.error_message || ''
+      })
+    }
+
     const threadState = getThreadState(threadId)
 
     if (!threadState) return false
@@ -155,6 +168,10 @@ export function useAgentStreamHandler({
             threadState.onGoingConv.msgChunks[toolMessage.id].push(toolMessage)
           }
         }
+        return false
+
+      case 'subagent_run_status':
+        // 状态已在上方经 onSubagentRunEvent 上报；该 chunk 不含消息内容，无需写入消息流。
         return false
 
       case 'error':

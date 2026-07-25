@@ -161,7 +161,11 @@
                 </template>
                 <template #actions-right-extra>
                   <a-tooltip
-                    :title="currentUseKnowledge ? '知识库问答：开（回答前强制检索知识库）' : '知识库问答：关（普通问答）'"
+                    :title="
+                      currentUseKnowledge
+                        ? '知识库问答：开（回答前强制检索知识库）'
+                        : '知识库问答：关（普通问答）'
+                    "
                   >
                     <button
                       type="button"
@@ -582,13 +586,7 @@ import {
   onDeactivated
 } from 'vue'
 import { message } from 'ant-design-vue'
-import {
-  ChevronDown,
-  Database,
-  FolderKanban,
-  LayoutList,
-  RefreshCw
-} from 'lucide-vue-next'
+import { ChevronDown, Database, FolderKanban, LayoutList, RefreshCw } from 'lucide-vue-next'
 import { formatFileSize } from '@/utils/file_utils'
 import FileTypeIcon from '@/components/common/FileTypeIcon.vue'
 import { generatePixelAvatar } from '@/utils/pixelAvatar'
@@ -669,7 +667,9 @@ const chatState = reactive({
   // 以threadId为键的线程状态
   threadStates: {},
   // 流式期间记录 父 task 工具调用 id → 子智能体 child_thread_id（首次运行时前端无法推算该 id）
-  subagentThreadByToolCall: {}
+  subagentThreadByToolCall: {},
+  // 流式期间记录 父 task 工具调用 id → 子智能体 run 状态（subagent_run_status 事件）
+  subagentRunStatusByToolCall: {}
 })
 const recordSubagentThread = (toolCallId, childThreadId) => {
   if (!toolCallId || !childThreadId) return
@@ -1452,13 +1452,15 @@ const runningSubagentRunsFromStream = computed(() => {
       const option = call.subagentType
         ? currentSubagentOptionBySlug.value.get(call.subagentType)
         : null
+      const streamedStatus = chatState.subagentRunStatusByToolCall[call.id]
       return {
         id: call.id,
         subagent_type: call.subagentType,
         subagent_name: option?.name || call.subagentType || '子智能体',
         description: call.description,
         child_thread_id: call.childThreadId || '',
-        status: 'running'
+        status: streamedStatus?.status || 'running',
+        ...(streamedStatus?.errorMessage ? { error_message: streamedStatus.errorMessage } : {})
       }
     })
 })
@@ -2172,7 +2174,14 @@ const { handleStreamChunk } = useAgentStreamHandler({
   processApprovalInStream,
   currentAgentId,
   supportsFiles,
-  streamSmoother
+  streamSmoother,
+  // 子智能体 chunk 直接携带 tool_call_id 与子线程 id：优先建立映射并记录 run 状态
+  onSubagentRunEvent: ({ toolCallId, childThreadId, status, errorMessage }) => {
+    if (childThreadId) recordSubagentThread(toolCallId, childThreadId)
+    if (status) {
+      chatState.subagentRunStatusByToolCall[toolCallId] = { status, errorMessage }
+    }
+  }
 })
 const { startRunStream, resumeActiveRunForThread, stopRunStreamSubscription } = useAgentRunStream({
   getThreadState,
