@@ -3,7 +3,8 @@
 实现父智能体通过 ``task`` 工具委派子任务给子智能体的完整链路：
 - 在父智能体 system prompt 中注入 ``TASK_SYSTEM_PROMPT``（task 工具使用规范）
 - 注册 ``task`` StructuredTool，父智能体调用时创建子 AgentRun 并 enqueue 执行
-- 子 run 终结后从其消息流解析结构化 ``SubAgentDeliverable``，渲染为 markdown 回传父 ToolMessage
+- 子 run 终结后优先从其最终 state 的 ``structured_response``（LLM 原生结构化输出）
+  提取 ``SubAgentDeliverable``，缺失时回退消息流正则解析，渲染为 markdown 回传父 ToolMessage
 - 复用 / 失败 / 取消等场景统一通过 ``Command`` 返回结构化 ToolMessage
 
 核心数据契约：``SubAgentDeliverable``（见 ``subagent_deliverable.py``）。
@@ -15,6 +16,7 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
@@ -29,12 +31,11 @@ try:
 except ImportError:
     append_to_system_message = None  # type: ignore[assignment]
 from langchain.agents.middleware.types import AgentMiddleware, ContextT, ModelRequest, ModelResponse, ResponseT
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command
 
-from starring.agents.context import build_agent_input_context
 from starring.agents.middlewares.subagent_deliverable import (
     EMPTY_DELIVERABLE,
     SubAgentDeliverable,
@@ -42,14 +43,18 @@ from starring.agents.middlewares.subagent_deliverable import (
 from starring.repositories.agent_repository import SUB_AGENT_BACKEND_ID, AgentRepository
 from starring.repositories.agent_run_repository import AgentRunRepository
 from starring.repositories.user_repository import UserRepository
+from starring.services.run_queue_service import SUBAGENT_QUEUE_NAME, get_arq_pool, publish_cancel_signal
 from starring.storage.postgres.manager import pg_manager
 from starring.storage.postgres.models_business import Agent
 from starring.utils import logger
 from starring.utils.datetime_utils import utc_isoformat
 from starring.utils.subagent_thread_utils import make_child_thread_id
 
-_CHILD_STATE_INHERIT_KEYS: frozenset[str] = frozenset()
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
+
+# 父侧等待子 run 终结的轮询间隔与默认超时（对齐子 worker job_timeout 3600s，可被 agent 配置覆盖）
+_SUBAGENT_POLL_INTERVAL_SECONDS = 0.5
+_DEFAULT_SUBAGENT_WAIT_TIMEOUT_SECONDS = 3600.0
 
 # 子智能体结构化输出的 fenced code block 正则
 # 用专属标识 "subagent-result" 避免误匹配其他代码块（如 python/json）
@@ -86,7 +91,8 @@ TASK_SYSTEM_PROMPT = """## `task`（子智能体任务工具）
 
 3. **Explicit deliverables**（显式声明期望产物）
    - 每次 task 调用的 description 中必须包含 `Expected deliverable:` 字段，说明期望子智能体返回的内容结构
-   - 示例：`Expected deliverable: structured result with summary, key_findings (3-5 items), sources (with file_id), confidence`
+   - 示例：`Expected deliverable: structured result with summary, key_findings (3-5 items),
+     sources (with file_id), confidence`
 
 4. **Synthesis is reasoning, not concatenation**（合成是推理，不是拼接）
    - 拿到多个子智能体的结果后，不要简单拼接摘要
@@ -233,6 +239,51 @@ def _parse_deliverable(messages: list, artifacts_from_state: list[str]) -> SubAg
         )
 
 
+def _deliverable_from_structured_response(result: dict[str, Any]) -> SubAgentDeliverable | None:
+    """从 LLM 原生结构化输出（state 的 ``structured_response`` 通道）提取 deliverable。
+
+    ``create_agent(response_format=ToolStrategy(SubAgentDeliverable))`` 会把 LLM 通过
+    工具调用产出的实例写入该通道；缺失或校验失败时返回 None，由调用方回退
+    ``_parse_deliverable`` 正则解析路径（应对模型不支持 tool calling 的边缘情况）。
+    """
+    structured = result.get("structured_response")
+    if structured is None:
+        return None
+    if isinstance(structured, SubAgentDeliverable):
+        return structured
+    try:
+        return SubAgentDeliverable.model_validate(structured)
+    except Exception as exc:
+        logger.warning(f"subagent structured_response 校验失败，回退正则解析路径: {exc}", exc_info=True)
+        return None
+
+
+def _extract_deliverable(result: dict[str, Any]) -> SubAgentDeliverable:
+    """从子智能体最终 state 提取交付物：原生结构化输出优先，正则解析降级兜底。
+
+    原生路径补齐两个字段：
+    - artifacts：LLM 声明的优先，state.artifacts 补充（去重保序，与正则路径一致）
+    - raw_text：LLM 未填时取最终 AIMessage 文本（结构化 tool call 消息可能无文本，允许为空）
+    """
+    messages = result.get("messages") or []
+    artifacts_from_state = _result_artifacts(result)
+
+    deliverable = _deliverable_from_structured_response(result)
+    if deliverable is None:
+        return _parse_deliverable(messages, artifacts_from_state)
+
+    payload = deliverable.model_dump()
+    payload["artifacts"] = list(dict.fromkeys(list(deliverable.artifacts) + artifacts_from_state))
+    if not str(payload.get("raw_text") or "").strip():
+        final_text = next(
+            (msg.text for msg in reversed(messages) if isinstance(msg, AIMessage) and msg.text),
+            "",
+        )
+        payload["raw_text"] = _truncate_raw_text(final_text)
+    # 重新 model_validate 以触发 summary 兜底 validator（model_copy 不会重跑校验）
+    return SubAgentDeliverable.model_validate(payload)
+
+
 def _deliverable_to_markdown(deliverable: SubAgentDeliverable, child_thread_id: str, subagent_type: str) -> str:
     """把结构化 deliverable 渲染为 LLM 友好的 markdown。
 
@@ -297,20 +348,15 @@ def _with_run_payload(subagent_run: dict[str, Any], run) -> dict[str, Any]:
     return {**subagent_run, **_agent_run_state_payload(run)}
 
 
-def _completed_tool_response(result: dict[str, Any], tool_call_id: str, subagent_run: dict[str, Any]) -> Command:
+def _completed_tool_response(
+    deliverable: SubAgentDeliverable, tool_call_id: str, subagent_run: dict[str, Any]
+) -> Command:
     """子 run 成功终结时构造父侧 ToolMessage 响应。
 
-    流程：从 result.messages 解析 ``SubAgentDeliverable`` → 渲染为 markdown
-    → 包装为带 child_thread_id 的 ToolMessage → 通过 ``Command`` 返回。
-    同时把 deliverable 完整快照写入 ``subagent_run`` 状态供前端/Langfuse 查看。
+    deliverable 由子 worker 在终结时提取并写入 ``agent_runs.output_payload``，
+    父侧读取后渲染为 markdown → 包装为带 child_thread_id 的 ToolMessage
+    → 通过 ``Command`` 返回。同时把 deliverable 完整快照写入 ``subagent_run`` 状态供前端/Langfuse 查看。
     """
-    # 不再调用 _final_assistant_text，改为直接传 messages 给 _parse_deliverable
-    # _final_assistant_text 仍保留（向后兼容其他调用点）
-    messages = result.get("messages") or []
-    artifacts_from_state = _result_artifacts(result)
-
-    deliverable = _parse_deliverable(messages, artifacts_from_state)
-
     subagent_run = {
         **subagent_run,
         "status": "completed",
@@ -335,20 +381,14 @@ def _completed_tool_response(result: dict[str, Any], tool_call_id: str, subagent
     return Command(update=update)
 
 
-def _reused_run_response(run, tool_call_id: str, subagent_run: dict[str, Any]) -> Command:
-    status = str(getattr(run, "status", "") or "unknown")
-    if status == "completed":
-        message = "子智能体任务已完成，未重复执行。"
-    elif status in _TERMINAL_RUN_STATUSES:
-        error_message = str(getattr(run, "error_message", "") or "")
-        message = f"子智能体任务已结束，状态：{status}。{error_message}".strip()
-    else:
-        message = f"子智能体任务已存在，当前状态：{status}，未重复提交。"
-
+def _cancelled_tool_response(run, tool_call_id: str, subagent_run: dict[str, Any]) -> Command:
+    """子 run 被取消（用户直接取消子 run，父 run 仍存活）时的 ToolMessage 响应。"""
+    message = "子智能体任务已取消。"
     subagent_run = {
         **subagent_run,
         **_agent_run_state_payload(run),
-        "status": status,
+        "status": "cancelled",
+        "completed_at": utc_isoformat(),
         "result_preview": _preview_text(message),
     }
     tool_message = ToolMessage(
@@ -356,6 +396,79 @@ def _reused_run_response(run, tool_call_id: str, subagent_run: dict[str, Any]) -
         tool_call_id=tool_call_id,
     )
     return Command(update={"messages": [tool_message], "subagent_runs": [subagent_run]})
+
+
+def _deliverable_from_output_payload(run) -> SubAgentDeliverable:
+    """从子 run 的 ``output_payload.deliverable`` 快照还原 deliverable。
+
+    缺失或校验失败时降级为仅含说明的兜底 deliverable（旧数据 / 异常子 worker 场景）。
+    """
+    payload = run.output_payload if isinstance(getattr(run, "output_payload", None), dict) else {}
+    snapshot = payload.get("deliverable")
+    if isinstance(snapshot, dict):
+        try:
+            return SubAgentDeliverable.model_validate(snapshot)
+        except Exception as exc:
+            logger.warning(f"子智能体 output_payload.deliverable 校验失败，回退兜底 deliverable: {exc}", exc_info=True)
+    return EMPTY_DELIVERABLE.model_copy()
+
+
+def _terminal_run_response(run, tool_call_id: str, subagent_run: dict[str, Any]) -> Command:
+    """按子 run 终态分发 ToolMessage 响应（completed / cancelled / failed / interrupted）。"""
+    status = str(getattr(run, "status", "") or "")
+    subagent_run = _with_run_payload(subagent_run, run)
+    if status == "completed":
+        return _completed_tool_response(_deliverable_from_output_payload(run), tool_call_id, subagent_run)
+    if status == "cancelled":
+        return _cancelled_tool_response(run, tool_call_id, subagent_run)
+    error = RuntimeError(str(getattr(run, "error_message", "") or f"子智能体任务终态异常：{status}"))
+    return _failed_tool_response(error, tool_call_id, subagent_run)
+
+
+async def _load_subagent_run_record(run_id: str):
+    async with pg_manager.get_async_session_context() as db:
+        return await AgentRunRepository(db).get_run(run_id)
+
+
+def _subagent_wait_timeout_seconds(agent: Agent) -> float:
+    """父侧等待超时：agent 配置 ``context.subagent_timeout_seconds`` 覆盖，默认 3600s。"""
+    config = agent.config_json if isinstance(agent.config_json, dict) else {}
+    context = config.get("context") if isinstance(config.get("context"), dict) else {}
+    try:
+        timeout = float(context.get("subagent_timeout_seconds"))
+    except (TypeError, ValueError):
+        return _DEFAULT_SUBAGENT_WAIT_TIMEOUT_SECONDS
+    return timeout if timeout > 0 else _DEFAULT_SUBAGENT_WAIT_TIMEOUT_SECONDS
+
+
+async def _await_subagent_terminal(
+    run_id: str,
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float = _SUBAGENT_POLL_INTERVAL_SECONDS,
+):
+    """轮询等待子 run 进入终态，返回终态 run 记录。
+
+    - 超过 ``timeout_seconds`` 抛 ``TimeoutError``（调用方负责级联取消子 run）
+    - 父 run 被取消（``CancelledError``）时级联发布子 run 取消信号后向上传播，
+      子 worker 通过 ``RunContext`` 感知信号并自行终结为 cancelled
+    """
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        while True:
+            run = await _load_subagent_run_record(run_id)
+            if run and run.status in _TERMINAL_RUN_STATUSES:
+                return run
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"子智能体运行超时（{int(timeout_seconds)} 秒）")
+            await asyncio.sleep(poll_interval_seconds)
+    except asyncio.CancelledError:
+        # 父 run 被取消：级联发布子 run 取消信号（best-effort）后向上传播
+        try:
+            await publish_cancel_signal(run_id)
+        except Exception as exc:
+            logger.warning(f"级联取消子智能体 run {run_id} 失败: {exc}")
+        raise
 
 
 def _agent_run_state_payload(run) -> dict[str, Any]:
@@ -397,71 +510,6 @@ def _failed_tool_response(error: Exception, tool_call_id: str, subagent_run: dic
     return Command(update=update)
 
 
-def _state_for_child(
-    description: str,
-    runtime: ToolRuntime,
-    *,
-    parent_thread_id: str,
-    file_thread_id: str,
-    skills_thread_id: str,
-    continuing: bool = False,
-) -> dict[str, Any]:
-    state = {} if continuing else {key: runtime.state[key] for key in _CHILD_STATE_INHERIT_KEYS if key in runtime.state}
-    state.update(
-        {
-            "parent_thread_id": parent_thread_id,
-            "file_thread_id": file_thread_id,
-            "skills_thread_id": skills_thread_id,
-        }
-    )
-    state["messages"] = [HumanMessage(content=description)]
-    return state
-
-
-def _child_config(
-    runtime: ToolRuntime,
-    *,
-    child_thread_id: str,
-    uid: str,
-    parent_thread_id: str,
-    file_thread_id: str,
-    skills_thread_id: str,
-    subagent_type: str,
-    run_id: str | None = None,
-    request_id: str | None = None,
-) -> dict:
-    parent_config = runtime.config or {}
-    config: dict[str, Any] = {}
-    if "callbacks" in parent_config:
-        config["callbacks"] = parent_config["callbacks"]
-    if "tags" in parent_config:
-        config["tags"] = parent_config["tags"]
-    parent_configurable = (
-        parent_config.get("configurable") if isinstance(parent_config.get("configurable"), dict) else {}
-    )
-    parent_configurable = {
-        key: value
-        for key, value in parent_configurable.items()
-        if not str(key).startswith(("checkpoint_", "__pregel_"))
-    }
-    config["configurable"] = {
-        **parent_configurable,
-        "thread_id": child_thread_id,
-        "uid": uid,
-        "parent_thread_id": parent_thread_id,
-        "file_thread_id": file_thread_id,
-        "skills_thread_id": skills_thread_id,
-        "subagent_type": subagent_type,
-        "subagent_thread_id": child_thread_id,
-        "subagent_tool_call_id": runtime.tool_call_id,
-        "run_id": run_id,
-        "request_id": request_id,
-        "ls_agent_type": "subagent",
-    }
-    config["recursion_limit"] = parent_config.get("recursion_limit", 300)
-    return config
-
-
 class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
     def __init__(self, *, parent_context, subagents: list[Agent]) -> None:
         super().__init__()
@@ -486,10 +534,16 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         agent: Agent,
         uid: str,
         parent_thread_id: str,
+        file_thread_id: str,
+        parent_model: str,
         tool_call_id: str,
         continuing: bool,
     ):
-        """创建子 AgentRun 记录并标记为 running，供父 run 通过 task 工具委派执行。
+        """创建子 AgentRun 记录（queued 状态），供独立子 worker 消费执行。
+
+        input_payload 完整快照子 worker 重建上下文所需的全部输入
+        （description / 父子线程关系 / file_thread_id / parent_model 回退模型），
+        running 状态由 ``process_subagent_run`` 任务自行标记。
 
         幂等性：基于 ``parent_run_id + child_thread_id + tool_call_id + agent_slug``
         生成 request_id，重复调用返回已存在 run（``continuing=True`` 场景下重连复用）。
@@ -543,10 +597,12 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
                     "subagent_name": agent.name,
                     "parent_thread_id": parent_thread_id,
                     "child_thread_id": child_thread_id,
+                    "file_thread_id": file_thread_id,
+                    "parent_model": parent_model,
                     "continuing": continuing,
                 },
             )
-            return await repo.mark_running(run.id), True
+            return run, True
 
     async def _set_subagent_run_status(
         self,
@@ -627,78 +683,51 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
                     agent=agent,
                     uid=uid,
                     parent_thread_id=parent_thread_id,
+                    file_thread_id=file_thread_id,
+                    parent_model=str(getattr(self.parent_context, "model", "") or "").strip(),
                     tool_call_id=runtime.tool_call_id,
                     continuing=continuing,
                 )
             except ValueError as exc:
                 return str(exc)
             subagent_run = _with_run_payload(subagent_run, run)
-            if not is_new_run:
-                return _reused_run_response(run, runtime.tool_call_id, subagent_run)
+            # 幂等复用：子 run 已终结（重连 / 重复 tool call）直接按终态回传，无需重新入队
+            if not is_new_run and run.status in _TERMINAL_RUN_STATUSES:
+                return _terminal_run_response(run, runtime.tool_call_id, subagent_run)
 
-            child_context = backend.context_schema()
-            config_context = (agent.config_json or {}).get("context") if isinstance(agent.config_json, dict) else None
-            child_input_context = await build_agent_input_context(
-                config_context if isinstance(config_context, dict) else {},
-                thread_id=child_thread_id,
-                uid=uid,
-                run_id=run.id,
-                request_id=run.request_id,
-            )
-            if not str(child_input_context.get("model") or "").strip():
-                parent_model = str(getattr(self.parent_context, "model", "") or "").strip()
-                if parent_model:
-                    child_input_context["model"] = parent_model
-            child_context.update_from_dict(child_input_context)
-            child_context.uid = uid
-            child_context.thread_id = child_thread_id
-            child_context.parent_thread_id = parent_thread_id
-            child_context.file_thread_id = file_thread_id
-            child_context.skills_thread_id = child_thread_id
-            child_context.run_id = run.id
-            child_context.request_id = run.request_id
-            child_context.is_subagent_runtime = True
-            child_context.output_format = "structured"
+            if is_new_run:
+                try:
+                    queue = await get_arq_pool()
+                    await queue.enqueue_job(
+                        "process_subagent_run",
+                        run.id,
+                        _job_id=f"run:{run.id}",
+                        _queue_name=SUBAGENT_QUEUE_NAME,
+                    )
+                except Exception as exc:
+                    failed_run = await self._set_subagent_run_status(
+                        run.id,
+                        "failed",
+                        error_type=type(exc).__name__,
+                        error_message=f"子任务入队失败：{exc}",
+                    )
+                    return _failed_tool_response(exc, runtime.tool_call_id, _with_run_payload(subagent_run, failed_run))
 
+            # 等待子 worker 终结子 run（复用 run 非终态时同样等待，_job_id 幂等保证不重复入队）。
+            # 父 run 被取消时 CancelledError 在 _await_subagent_terminal 内级联取消子 run 后向上传播。
             try:
-                graph = await backend.get_graph(context=child_context)
-                result = await graph.ainvoke(
-                    _state_for_child(
-                        description,
-                        runtime,
-                        parent_thread_id=parent_thread_id,
-                        file_thread_id=file_thread_id,
-                        skills_thread_id=child_thread_id,
-                        continuing=continuing,
-                    ),
-                    config=_child_config(
-                        runtime,
-                        child_thread_id=child_thread_id,
-                        uid=uid,
-                        parent_thread_id=parent_thread_id,
-                        file_thread_id=file_thread_id,
-                        skills_thread_id=child_thread_id,
-                        subagent_type=subagent_type,
-                        run_id=run.id,
-                        request_id=run.request_id,
-                    ),
-                    context=child_context,
-                )
-            except asyncio.CancelledError:
-                await self._set_subagent_run_status(run.id, "cancelled")
-                raise
-            except Exception as exc:
-                failed_run = await self._set_subagent_run_status(
+                terminal_run = await _await_subagent_terminal(
                     run.id,
-                    "failed",
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
+                    timeout_seconds=_subagent_wait_timeout_seconds(agent),
                 )
-                return _failed_tool_response(exc, runtime.tool_call_id, _with_run_payload(subagent_run, failed_run))
-            completed_run = await self._set_subagent_run_status(run.id, "completed")
-            return _completed_tool_response(
-                result, runtime.tool_call_id, _with_run_payload(subagent_run, completed_run)
-            )
+            except TimeoutError as exc:
+                # 超时级联取消子 run（best-effort），子 worker 收到信号后自行终结为 cancelled
+                try:
+                    await publish_cancel_signal(run.id)
+                except Exception as cancel_exc:
+                    logger.warning(f"超时取消子智能体 run {run.id} 失败: {cancel_exc}")
+                return _failed_tool_response(exc, runtime.tool_call_id, subagent_run)
+            return _terminal_run_response(terminal_run, runtime.tool_call_id, subagent_run)
 
         return StructuredTool.from_function(
             name="task",

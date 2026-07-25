@@ -11,5 +11,6 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from starring.services.run_worker import WorkerSettings
+from starring.services.subagent_run_worker import SubAgentWorkerSettings
 
-__all__ = ["WorkerSettings"]
+__all__ = ["SubAgentWorkerSettings", "WorkerSettings"]
