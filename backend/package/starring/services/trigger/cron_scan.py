@@ -10,9 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
-from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import UTC, datetime, timedelta
 
 from starring.repositories.trigger_repository import TriggerRepository
 from starring.services.run_queue_service import get_arq_pool
@@ -24,15 +22,13 @@ from starring.utils.logging_config import logger
 # 模块加载时一次性导入 cron 依赖，避免 _is_due 每次调用都尝试 import。
 # 未安装时记录 error 并设置可用性标志，_is_due 直接返回 False（保持原行为）。
 try:
-    from croniter import croniter  # type: ignore[import-not-found]
     import pytz  # type: ignore[import-not-found]
+    from croniter import croniter  # type: ignore[import-not-found]
 
     _CRON_DEPS_AVAILABLE = True
 except ImportError as e:
     _CRON_DEPS_AVAILABLE = False
-    logger.error(
-        f"croniter/pytz not installed, cron triggers will be skipped: {e}"
-    )
+    logger.error(f"croniter/pytz not installed, cron triggers will be skipped: {e}")
 
 
 async def scan_triggers(ctx: dict) -> None:
@@ -62,9 +58,7 @@ async def scan_triggers(ctx: dict) -> None:
                 await _enqueue_trigger_run(trigger, scheduled_time_iso)
                 enqueued_count += 1
             except Exception as e:
-                logger.exception(
-                    f"Failed to enqueue trigger {trigger.id} for {scheduled_time_iso}: {e}"
-                )
+                logger.exception(f"Failed to enqueue trigger {trigger.id} for {scheduled_time_iso}: {e}")
 
         if enqueued_count > 0:
             logger.info(f"scan_triggers: enqueued {enqueued_count} trigger(s) for {scheduled_time_iso}")
@@ -100,13 +94,11 @@ def _is_due(trigger: Trigger, now_utc: datetime) -> bool:
     try:
         tz = pytz.timezone(timezone_name)
     except Exception as e:
-        logger.warning(
-            f"Invalid timezone={timezone_name} for trigger={trigger.id}: {e}"
-        )
+        logger.warning(f"Invalid timezone={timezone_name} for trigger={trigger.id}: {e}")
         return False
 
     # 把 UTC naive 当作 UTC，转为用户时区本地时间，再归一化到分钟
-    now_local = now_utc.replace(tzinfo=timezone.utc).astimezone(tz)
+    now_local = now_utc.replace(tzinfo=UTC).astimezone(tz)
     now_local_minute = now_local.replace(second=0, microsecond=0)
 
     try:
@@ -118,9 +110,7 @@ def _is_due(trigger: Trigger, now_utc: datetime) -> bool:
         # 比对时统一去掉 tzinfo
         return next_time_minute.replace(tzinfo=None) == now_local_minute.replace(tzinfo=None)
     except Exception as e:
-        logger.warning(
-            f"Invalid cron_expr={cron_expr!r} for trigger={trigger.id}: {e}"
-        )
+        logger.warning(f"Invalid cron_expr={cron_expr!r} for trigger={trigger.id}: {e}")
         return False
 
 
@@ -129,11 +119,13 @@ async def _enqueue_trigger_run(trigger: Trigger, scheduled_time_iso: str) -> Non
 
     幂等 key：trigger:{trigger_id}:{scheduled_time_iso}
     ARQ 相同 _job_id 不会重复入队。
+    kb_sync 类型入队 execute_kb_sync（知识库同步），其余入队 execute_trigger_run。
     """
     job_id = f"trigger:{trigger.id}:{scheduled_time_iso}"
+    task_name = "execute_kb_sync" if trigger.trigger_type == "kb_sync" else "execute_trigger_run"
     queue = await get_arq_pool()
     await queue.enqueue_job(
-        "execute_trigger_run",
+        task_name,
         trigger.id,
         scheduled_time_iso,
         _job_id=job_id,

@@ -1,4 +1,4 @@
-﻿"""PostgreSQL 数据库管理器 - 支持知识库和业务数据
+"""PostgreSQL 数据库管理器 - 支持知识库和业务数据
 提供统一的配置入口，连接管理，LangGraph专用连接
 LangGraph的检查点机制对数据库有特殊的要求，通过LangGraph_pool，向LangGraph提供专用连接，
 负责保存和恢复多轮会话，Agent执行状态
@@ -475,6 +475,8 @@ class PostgresManager(metaclass=SingletonMeta):
             "CREATE INDEX IF NOT EXISTS ix_conversations_is_pinned ON conversations(is_pinned)",
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_model_providers_provider_id ON model_providers(provider_id)",
             "CREATE INDEX IF NOT EXISTS ix_model_providers_is_enabled ON model_providers(is_enabled)",
+            # kb_sync 触发器不关联 agent，agent_id 改为可空
+            "ALTER TABLE IF EXISTS triggers ALTER COLUMN agent_id DROP NOT NULL",
         ]
         async with self.async_engine.begin() as conn:
             for stmt in stmts:

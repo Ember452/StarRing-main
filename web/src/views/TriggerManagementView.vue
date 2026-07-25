@@ -4,7 +4,7 @@
     <div class="page-header">
       <div class="header-left">
         <h2 class="page-title">触发器管理</h2>
-        <span class="page-subtitle">cron 定时触发与 webhook 入口</span>
+        <span class="page-subtitle">cron 定时触发、webhook 入口与知识库定时同步</span>
       </div>
       <div class="header-right">
         <a-select
@@ -17,6 +17,7 @@
           <a-select-option value="">全部类型</a-select-option>
           <a-select-option value="cron">Cron</a-select-option>
           <a-select-option value="webhook">Webhook</a-select-option>
+          <a-select-option value="kb_sync">知识库同步</a-select-option>
         </a-select>
         <a-button type="primary" @click="openCreateModal">
           <template #icon><Plus /></template>
@@ -36,7 +37,7 @@
     >
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'trigger_type'">
-          <a-tag :color="record.trigger_type === 'cron' ? 'blue' : 'purple'">
+          <a-tag :color="triggerTypeColor(record.trigger_type)">
             {{ record.trigger_type }}
           </a-tag>
         </template>
@@ -59,7 +60,13 @@
         </template>
         <template v-else-if="column.key === 'actions'">
           <a-space :size="4">
-            <a-button type="link" size="small" @click="openRunsDrawer(record)">历史</a-button>
+            <!-- kb_sync 无 AgentRun，隐藏执行历史入口 -->
+            <a-button
+              v-if="record.trigger_type !== 'kb_sync'"
+              type="link"
+              size="small"
+              @click="openRunsDrawer(record)"
+            >历史</a-button>
             <a-button type="link" size="small" @click="openEditModal(record)">编辑</a-button>
             <a-button
               v-if="record.trigger_type === 'webhook'"
@@ -96,18 +103,35 @@
         <a-form-item label="描述">
           <a-input v-model:value="formData.desc" placeholder="可选" />
         </a-form-item>
-        <a-form-item label="关联智能体" required>
+        <a-form-item v-if="formData.trigger_type !== 'kb_sync'" label="关联智能体" required>
           <a-input v-model:value="formData.agent_id" placeholder="Agent slug，如 ChatbotAgent" :disabled="!!editingTrigger" />
         </a-form-item>
         <a-form-item label="触发器类型" required>
           <a-radio-group v-model:value="formData.trigger_type" :disabled="!!editingTrigger">
             <a-radio value="cron">Cron 定时</a-radio>
             <a-radio value="webhook">Webhook 入口</a-radio>
+            <a-radio value="kb_sync">知识库同步</a-radio>
           </a-radio-group>
         </a-form-item>
 
-        <!-- cron 配置 -->
-        <template v-if="formData.trigger_type === 'cron'">
+        <!-- kb_sync 配置：目标知识库 -->
+        <a-form-item v-if="formData.trigger_type === 'kb_sync'" label="目标知识库" required>
+          <a-select
+            v-model:value="kbSyncKbId"
+            :loading="kbListLoading"
+            placeholder="选择要定时同步的知识库"
+            show-search
+            option-filter-prop="label"
+          >
+            <a-select-option v-for="kb in kbList" :key="kb.kb_id" :value="kb.kb_id" :label="kb.name">
+              {{ kb.name }}
+            </a-select-option>
+          </a-select>
+          <div class="form-tip">到点后重新抓取库内 URL 来源文档，内容变化才重建索引</div>
+        </a-form-item>
+
+        <!-- cron / kb_sync 共用定时配置 -->
+        <template v-if="formData.trigger_type === 'cron' || formData.trigger_type === 'kb_sync'">
           <a-form-item label="Cron 表达式" required>
             <a-input v-model:value="cronConfig.cron_expr" placeholder="如：0 8 * * *（每天 8:00）" />
             <div class="form-tip">分钟 小时 日 月 周，支持 5 段标准 cron</div>
@@ -130,7 +154,7 @@
           </a-form-item>
         </template>
 
-        <a-form-item label="触发时的输入 Query">
+        <a-form-item v-if="formData.trigger_type !== 'kb_sync'" label="触发时的输入 Query">
           <a-textarea
             v-model:value="formData.input_query"
             :rows="2"
@@ -179,6 +203,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import { Plus } from 'lucide-vue-next'
 import { triggerApi } from '@/apis/trigger'
+import { databaseApi } from '@/apis/knowledge_api'
 
 // ---------------------------------------------------------------------------
 // 列表
@@ -246,6 +271,24 @@ const webhookSecretMasked = computed(() => {
   return webhookSecret.value.slice(0, 8) + '***'
 })
 
+// kb_sync：目标知识库下拉（懒加载，只拉一次）
+const kbSyncKbId = ref(undefined)
+const kbList = ref([])
+const kbListLoading = ref(false)
+
+async function loadKbList() {
+  if (kbList.value.length) return
+  kbListLoading.value = true
+  try {
+    const data = await databaseApi.getAccessibleDatabases()
+    kbList.value = data.databases || []
+  } catch (err) {
+    message.error(err.message || '加载知识库列表失败')
+  } finally {
+    kbListLoading.value = false
+  }
+}
+
 function openCreateModal() {
   editingTrigger.value = null
   Object.assign(formData, {
@@ -254,6 +297,8 @@ function openCreateModal() {
   })
   Object.assign(cronConfig, { cron_expr: '', timezone: 'Asia/Shanghai' })
   webhookSecret.value = ''
+  kbSyncKbId.value = undefined
+  loadKbList()
   formModalOpen.value = true
 }
 
@@ -274,17 +319,29 @@ function openEditModal(record) {
     })
   } else if (record.trigger_type === 'webhook') {
     webhookSecret.value = record.config?.secret || ''
+  } else if (record.trigger_type === 'kb_sync') {
+    Object.assign(cronConfig, {
+      cron_expr: record.config?.cron_expr || '',
+      timezone: record.config?.timezone || 'Asia/Shanghai',
+    })
+    kbSyncKbId.value = record.config?.kb_id || undefined
+    loadKbList()
   }
   formModalOpen.value = true
 }
 
 async function submitForm() {
-  if (!formData.name || !formData.agent_id) {
-    message.warning('名称和 Agent 不能为空')
+  const isKbSync = formData.trigger_type === 'kb_sync'
+  if (!formData.name || (!isKbSync && !formData.agent_id)) {
+    message.warning(isKbSync ? '名称不能为空' : '名称和 Agent 不能为空')
     return
   }
-  if (formData.trigger_type === 'cron' && !cronConfig.cron_expr) {
+  if ((formData.trigger_type === 'cron' || isKbSync) && !cronConfig.cron_expr) {
     message.warning('Cron 表达式不能为空')
+    return
+  }
+  if (isKbSync && !kbSyncKbId.value) {
+    message.warning('请选择目标知识库')
     return
   }
 
@@ -303,25 +360,34 @@ async function submitForm() {
           cron_expr: cronConfig.cron_expr,
           timezone: cronConfig.timezone || 'Asia/Shanghai',
         }
+      } else if (isKbSync) {
+        fields.config = {
+          cron_expr: cronConfig.cron_expr,
+          timezone: cronConfig.timezone || 'Asia/Shanghai',
+          kb_id: kbSyncKbId.value,
+        }
       }
       await triggerApi.update(editingTrigger.value.id, fields)
       message.success('已更新')
     } else {
       // 创建
+      const cronFields = {
+        cron_expr: cronConfig.cron_expr,
+        timezone: cronConfig.timezone || 'Asia/Shanghai',
+      }
       const payload = {
         name: formData.name,
         desc: formData.desc || '',
         trigger_type: formData.trigger_type,
-        agent_id: formData.agent_id,
-        input_query: formData.input_query || null,
+        agent_id: isKbSync ? null : formData.agent_id,
+        input_query: isKbSync ? null : formData.input_query || null,
         is_active: formData.is_active,
         config:
           formData.trigger_type === 'cron'
-            ? {
-                cron_expr: cronConfig.cron_expr,
-                timezone: cronConfig.timezone || 'Asia/Shanghai',
-              }
-            : {},
+            ? cronFields
+            : isKbSync
+              ? { ...cronFields, kb_id: kbSyncKbId.value }
+              : {},
       }
       const data = await triggerApi.create(payload)
       // 创建 webhook 触发器后展示完整 secret
@@ -412,6 +478,11 @@ async function openRunsDrawer(record) {
 // ---------------------------------------------------------------------------
 // 工具函数
 // ---------------------------------------------------------------------------
+function triggerTypeColor(type) {
+  const map = { cron: 'blue', webhook: 'purple', kb_sync: 'cyan' }
+  return map[type] || 'default'
+}
+
 function runStatusColor(status) {
   const map = {
     completed: 'green',

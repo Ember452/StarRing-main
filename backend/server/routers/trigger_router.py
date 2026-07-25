@@ -33,8 +33,8 @@ class TriggerCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=128, description="触发器名称")
     desc: str = Field("", max_length=512, description="描述")
-    trigger_type: str = Field(..., description="触发器类型: cron / webhook")
-    agent_id: str = Field(..., description="关联的 Agent slug")
+    trigger_type: str = Field(..., description="触发器类型: cron / webhook / kb_sync")
+    agent_id: str | None = Field(None, description="关联的 Agent slug（kb_sync 类型无需传）")
     config: dict = Field(default_factory=dict, description="触发器配置")
     input_query: str | None = Field(None, description="触发器执行时的输入 query")
     is_active: bool = Field(True, description="是否启用")
@@ -56,8 +56,8 @@ class TriggerUpdate(BaseModel):
 
 
 def _validate_trigger_type(trigger_type: str) -> str:
-    if trigger_type not in ("cron", "webhook"):
-        raise HTTPException(status_code=422, detail="trigger_type 必须为 cron 或 webhook")
+    if trigger_type not in ("cron", "webhook", "kb_sync"):
+        raise HTTPException(status_code=422, detail="trigger_type 必须为 cron、webhook 或 kb_sync")
     return trigger_type
 
 
@@ -80,6 +80,21 @@ def _validate_cron_config(config: dict) -> None:
         raise HTTPException(status_code=422, detail=f"cron 配置非法: {e}") from e
 
 
+async def _validate_kb_sync_config(config: dict, current_user: User) -> None:
+    """kb_sync 触发器校验：cron 配置合法，且 kb_id 存在、当前用户为管理员或 KB owner。"""
+    _validate_cron_config(config)
+    kb_id = config.get("kb_id")
+    if not kb_id:
+        raise HTTPException(status_code=422, detail="kb_sync 触发器必须配置 config.kb_id")
+    from starring.repositories.knowledge_base_repository import KnowledgeBaseRepository
+
+    kb = await KnowledgeBaseRepository().get_by_kb_id(kb_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail=f"知识库 {kb_id} 不存在")
+    if current_user.role not in ("admin", "superadmin") and kb.created_by != current_user.uid:
+        raise HTTPException(status_code=403, detail="没有权限管理该知识库")
+
+
 # ---------------------------------------------------------------------------
 # 管理 API
 # ---------------------------------------------------------------------------
@@ -93,6 +108,8 @@ async def create_trigger(
 ):
     """创建触发器。webhook 类型自动生成 32 字节 hex secret。"""
     _validate_trigger_type(payload.trigger_type)
+    if payload.trigger_type in ("cron", "webhook") and not payload.agent_id:
+        raise HTTPException(status_code=422, detail="cron/webhook 触发器必须配置 agent_id")
     config = dict(payload.config or {})
     if payload.trigger_type == "cron":
         _validate_cron_config(config)
@@ -100,13 +117,16 @@ async def create_trigger(
     elif payload.trigger_type == "webhook":
         # 自动生成 secret（调用方无需传）
         config["secret"] = config.get("secret") or generate_secret()
+    elif payload.trigger_type == "kb_sync":
+        await _validate_kb_sync_config(config, current_user)
+        config.setdefault("timezone", "Asia/Shanghai")
 
     trigger = Trigger(
         id=str(uuid.uuid4()),
         name=payload.name,
         desc=payload.desc,
         trigger_type=payload.trigger_type,
-        agent_id=payload.agent_id,
+        agent_id=payload.agent_id if payload.trigger_type != "kb_sync" else None,
         uid=str(current_user.uid),
         config=config,
         input_query=payload.input_query,
@@ -119,7 +139,7 @@ async def create_trigger(
 
 @trigger_router.get("")
 async def list_triggers(
-    trigger_type: str | None = Query(None, description="按类型过滤: cron / webhook"),
+    trigger_type: str | None = Query(None, description="按类型过滤: cron / webhook / kb_sync"),
     agent_id: str | None = Query(None, description="按 Agent slug 过滤"),
     is_active: bool | None = Query(None, description="按启用状态过滤"),
     offset: int = Query(0, ge=0),
@@ -181,6 +201,9 @@ async def update_trigger(
         # cron 改 config 时校验 cron_expr
         if trigger.trigger_type == "cron":
             _validate_cron_config(config)
+        # kb_sync 改 config 时重新校验 cron 配置与 kb_id 权限
+        if trigger.trigger_type == "kb_sync":
+            await _validate_kb_sync_config(config, current_user)
         # webhook 改 config 时保留旧 secret（除非显式传入新 secret）
         if trigger.trigger_type == "webhook" and "secret" not in config:
             old_secret = (trigger.config or {}).get("secret", "")

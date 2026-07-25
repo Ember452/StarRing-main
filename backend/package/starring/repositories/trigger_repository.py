@@ -21,9 +21,7 @@ class TriggerRepository:
 
     async def get_for_user(self, trigger_id: str, uid: str) -> Trigger | None:
         """仅返回属于当前用户的触发器（管理 API 鉴权用）。"""
-        result = await self.db.execute(
-            select(Trigger).where(and_(Trigger.id == trigger_id, Trigger.uid == str(uid)))
-        )
+        result = await self.db.execute(select(Trigger).where(and_(Trigger.id == trigger_id, Trigger.uid == str(uid))))
         return result.scalar_one_or_none()
 
     async def list_for_user(
@@ -49,11 +47,11 @@ class TriggerRepository:
         return list(result.scalars().all())
 
     async def list_active_cron_triggers(self) -> list[Trigger]:
-        """cron 元任务扫描用：列出所有启用的 cron 触发器（不限用户）。"""
+        """cron 元任务扫描用：列出所有启用的定时类触发器（cron / kb_sync，不限用户）。"""
         result = await self.db.execute(
             select(Trigger).where(
                 and_(
-                    Trigger.trigger_type == "cron",
+                    Trigger.trigger_type.in_(("cron", "kb_sync")),
                     Trigger.is_active.is_(True),
                 )
             )
@@ -66,9 +64,7 @@ class TriggerRepository:
         await self.db.refresh(trigger)
         return trigger
 
-    async def update_fields(
-        self, trigger: Trigger, *, fields: dict
-    ) -> Trigger:
+    async def update_fields(self, trigger: Trigger, *, fields: dict) -> Trigger:
         """字段级更新：仅更新 fields 中传入的键。"""
         for key, value in fields.items():
             if hasattr(trigger, key):
@@ -94,9 +90,7 @@ class TriggerRepository:
         )
         await self.db.commit()
 
-    async def mark_finished(
-        self, trigger_id: str, status: str, run_id: str | None
-    ) -> None:
+    async def mark_finished(self, trigger_id: str, status: str, run_id: str | None) -> None:
         """无幂等保护的终结标记（用于触发器侧异常路径，此时 run_id 可能为 None）。"""
         values: dict = {
             "last_run_status": status,
@@ -108,9 +102,7 @@ class TriggerRepository:
         await self.db.execute(update(Trigger).where(Trigger.id == trigger_id).values(**values))
         await self.db.commit()
 
-    async def mark_finished_if_current(
-        self, trigger_id: str, run_id: str, status: str
-    ) -> None:
+    async def mark_finished_if_current(self, trigger_id: str, run_id: str, status: str) -> None:
         """幂等保护：仅当 trigger.last_run_id == run_id 时才更新。
 
         用途：mark_run_terminal 钩子调用，避免旧 run 终结覆盖新 run 的状态。
