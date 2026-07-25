@@ -9,6 +9,9 @@ WorkflowBackend（硬编排）并列。其核心定位是「LLM 自主路由的�
 
 设计依据：docs/vibe/P0-1-Orchestrator-Worker-子智能体结构化交付物-20260719.md
 """
+
+import os
+
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRetryMiddleware, TodoListMiddleware
@@ -16,11 +19,11 @@ from langchain.agents.middleware import ModelRetryMiddleware, TodoListMiddleware
 from starring.agents import BaseAgent, load_chat_model, resolve_chat_model_spec
 from starring.agents.backends import create_agent_filesystem_middleware
 from starring.agents.context import (
+    DEFAULT_STARRING_SUMMARY_PROMPT,
     DEFAULT_SUMMARY_KEEP_MESSAGES,
     DEFAULT_SUMMARY_THRESHOLD_K,
     DEFAULT_SUMMARY_TOOL_RESULT_TOKEN_LIMIT,
     DEFAULT_TOOL_RESULT_EVICTION_K_TOKENS,
-    DEFAULT_STARRING_SUMMARY_PROMPT,
     prepare_agent_runtime_context,
 )
 from starring.agents.middlewares import (
@@ -29,6 +32,7 @@ from starring.agents.middlewares import (
     save_attachments_to_fs,
 )
 from starring.agents.middlewares.knowledge_base import KnowledgeBaseMiddleware
+from starring.agents.middlewares.memory import MemoryMiddleware
 from starring.agents.middlewares.skills import SkillsMiddleware
 from starring.agents.middlewares.subagent_task import create_subagent_task_middleware
 from starring.agents.toolkits.service import resolve_configured_runtime_tools
@@ -36,6 +40,9 @@ from starring.agents.toolkits.service import resolve_configured_runtime_tools
 from .context import ChatBotContext
 from .prompt import KB_FORCE_PROMPT, TODO_MID_PROMPT, build_prompt_with_context
 from .state import ChatBotState
+
+# LITE 模式（无 Milvus）不启用长期记忆，与 knowledge 路由跳过注册保持一致
+_LITE_MODE = os.environ.get("LITE_MODE", "").lower() in ("true", "1")
 
 
 async def _build_middlewares(context):
@@ -80,6 +87,9 @@ async def _build_middlewares(context):
     # None（默认）或 True 均挂载，保持其他调用方行为不变。
     if getattr(context, "use_knowledge", None) is not False:
         middlewares.append(KnowledgeBaseMiddleware())
+    # 长期记忆：仅当智能体显式开启 use_memory 且非 LITE 模式（依赖 Milvus）时挂载
+    if getattr(context, "use_memory", False) and not _LITE_MODE:
+        middlewares.append(MemoryMiddleware(str(getattr(context, "uid", "") or "")))
     # Skills 工具自动发现：从已注册 toolkit 集合中挂载可用工具
     middlewares.append(SkillsMiddleware())
     # Orchestrator-Worker 子智能体 task 工具：未配置子智能体时返回 None 跳过
@@ -91,7 +101,7 @@ async def _build_middlewares(context):
         [
             summary_middleware,
             TodoListMiddleware(system_prompt=TODO_MID_PROMPT),
-            *( [PatchToolCallsMiddleware()] if PatchToolCallsMiddleware is not None else [] ),
+            *([PatchToolCallsMiddleware()] if PatchToolCallsMiddleware is not None else []),
             ModelRetryMiddleware(max_retries=getattr(context, "model_retry_times", 2)),
             TokenUsageMiddleware(),
         ]
@@ -105,6 +115,7 @@ class ChatbotAgent(BaseAgent):
     定位：通用对话智能体，挂载本地工具 + task 子智能体工具，LLM 自主决定路由。
     被自动发现注册到 agent_manager，由 chat_service / agent_run_service 调用 get_graph() 编译。
     """
+
     name = "智能助手"
     description = "基础的对话机器人，可以回答问题，可在配置中启用需要的工具。"
     capabilities = ["file_upload", "files"]  # 支持文件上传功能
@@ -133,12 +144,12 @@ class ChatbotAgent(BaseAgent):
             system_prompt = f"{system_prompt}\n{KB_FORCE_PROMPT}"
         graph = create_agent(
             # TODO：警告 Unexpected type
-            model=load_chat_model(fully_specified_name=model_spec), # 智能体使用的大语言模型
-            tools=await resolve_configured_runtime_tools(context), # 智能体使用的工具
-            system_prompt=system_prompt, # 智能体使用的系统提示
-            middleware=await _build_middlewares(context), # 智能体使用的中间件
+            model=load_chat_model(fully_specified_name=model_spec),  # 智能体使用的大语言模型
+            tools=await resolve_configured_runtime_tools(context),  # 智能体使用的工具
+            system_prompt=system_prompt,  # 智能体使用的系统提示
+            middleware=await _build_middlewares(context),  # 智能体使用的中间件
             state_schema=ChatBotState,  # 图中流转的全局状态的数据结构
-            checkpointer=await self._get_checkpointer(), # 传入检查点保存器，让智能体拥有记忆
+            checkpointer=await self._get_checkpointer(),  # 传入检查点保存器，让智能体拥有记忆
         )
 
         return graph

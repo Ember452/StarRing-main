@@ -809,47 +809,47 @@ class AgentRun(Base):
 
 
 class Trigger(Base):
-    """Trigger table - 触发器配置表（cron / webhook 触发器）"""
+    """Trigger table - 触发器配置表（cron / webhook / kb_sync 触发器）"""
 
     __tablename__ = "triggers"
 
     id = Column(String(64), primary_key=True, comment="Trigger ID (UUID)")
     name = Column(String(128), nullable=False, comment="触发器名称")
     desc = Column(String(512), nullable=False, default="", comment="描述")
-    trigger_type = Column(
-        String(32), nullable=False, index=True, comment="触发器类型: cron / webhook"
-    )
+    trigger_type = Column(String(32), nullable=False, index=True, comment="触发器类型: cron / webhook / kb_sync")
     # agent_id 用 String 引用 agents.slug（与 AgentRun.agent_id 一致），不加 ForeignKey
     # 原因：agents 表主键是 Integer id，slug 是 unique 但非主键，跨约束 FK 会导致迁移复杂
-    agent_id = Column(
-        String(80), nullable=False, index=True, comment="关联的 Agent slug"
-    )
+    # kb_sync 触发器不关联 agent，故允许为空
+    agent_id = Column(String(80), nullable=True, index=True, comment="关联的 Agent slug（kb_sync 类型为空）")
     uid = Column(
-        String(64), index=True, nullable=False,
+        String(64),
+        index=True,
+        nullable=False,
         comment="创建者 UID，触发器以其身份调 create_run",
     )
     config = Column(
-        JSON, nullable=False, default=dict,
-        comment='触发器配置：cron={"cron_expr","timezone"} / webhook={"secret","allowed_ips"}',
+        JSON,
+        nullable=False,
+        default=dict,
+        comment='触发器配置：cron={"cron_expr","timezone"} / webhook={"secret","allowed_ips"}'
+        ' / kb_sync={"cron_expr","timezone","kb_id"}',
     )
     input_query = Column(
-        Text, nullable=True,
+        Text,
+        nullable=True,
         comment="触发器执行时的输入 query（可模板化，P2 扩展）",
     )
     is_active = Column(Boolean, default=True, index=True, comment="是否启用")
     last_run_at = Column(DateTime, nullable=True, comment="上次执行时间")
     last_run_status = Column(
-        String(32), nullable=True,
+        String(32),
+        nullable=True,
         comment="上次执行状态: completed/failed/running/interrupted",
     )
-    last_run_id = Column(
-        String(64), nullable=True, index=True, comment="上次执行的 AgentRun ID"
-    )
+    last_run_id = Column(String(64), nullable=True, index=True, comment="上次执行的 AgentRun ID")
     run_count = Column(Integer, default=0, comment="累计执行次数")
     created_at = Column(DateTime, default=utc_now_naive, comment="Creation time")
-    updated_at = Column(
-        DateTime, default=utc_now_naive, onupdate=utc_now_naive, comment="Update time"
-    )
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, comment="Update time")
 
     def to_dict(self, *, include_secret: bool = False) -> dict[str, Any]:
         """序列化为 dict。webhook secret 默认脱敏（仅显示前 8 位）。"""
@@ -888,22 +888,18 @@ class Workflow(Base):
     name = Column(String(128), nullable=False, comment="工作流名称")
     desc = Column(String(512), nullable=False, default="", comment="描述")
     # slug 用于被 agent_id 引用（与 agents.slug 一致），WorkflowBackend 实例的 agent_id = workflow.slug
-    slug = Column(
-        String(80), unique=True, index=True, nullable=False, comment="工作流唯一 slug"
-    )
-    owner_uid = Column(
-        String(64), index=True, nullable=False, comment="创建者 UID"
-    )
+    slug = Column(String(80), unique=True, index=True, nullable=False, comment="工作流唯一 slug")
+    owner_uid = Column(String(64), index=True, nullable=False, comment="创建者 UID")
     definition = Column(
-        JSON, nullable=False, default=dict,
+        JSON,
+        nullable=False,
+        default=dict,
         comment='工作流定义：{"nodes": [...], "edges": [...], "version": 1}',
     )
     version = Column(Integer, nullable=False, default=1, comment="当前版本号")
     is_active = Column(Boolean, default=True, index=True, comment="是否启用")
     created_at = Column(DateTime, default=utc_now_naive, comment="Creation time")
-    updated_at = Column(
-        DateTime, default=utc_now_naive, onupdate=utc_now_naive, comment="Update time"
-    )
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, comment="Update time")
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为 dict。"""
@@ -916,6 +912,34 @@ class Workflow(Base):
             "definition": self.definition or {},
             "version": self.version,
             "is_active": self.is_active,
+            "created_at": format_utc_datetime(self.created_at),
+            "updated_at": format_utc_datetime(self.updated_at),
+        }
+
+
+class UserMemory(Base):
+    """UserMemory table - 用户长期记忆表（P0 长期记忆，真源；向量存 Milvus starring_memory 集合）"""
+
+    __tablename__ = "user_memories"
+
+    id = Column(String(64), primary_key=True, comment="Memory ID (UUID)")
+    uid = Column(String(64), index=True, nullable=False, comment="所属用户 UID")
+    content = Column(Text, nullable=False, comment="记忆内容（单条用户事实）")
+    source = Column(String(16), nullable=False, default="auto", comment="来源: auto(自动抽取)/manual(remember 工具)")
+    thread_id = Column(String(64), nullable=True, comment="来源会话 thread_id（可空）")
+    run_id = Column(String(64), nullable=True, comment="来源运行 run_id（可空）")
+    created_at = Column(DateTime, default=utc_now_naive, comment="Creation time")
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, comment="Update time")
+
+    def to_dict(self) -> dict[str, Any]:
+        """序列化为 dict。"""
+        return {
+            "id": self.id,
+            "uid": self.uid,
+            "content": self.content,
+            "source": self.source,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
             "created_at": format_utc_datetime(self.created_at),
             "updated_at": format_utc_datetime(self.updated_at),
         }

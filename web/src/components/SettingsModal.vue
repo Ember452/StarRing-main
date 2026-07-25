@@ -64,6 +64,15 @@
             <SquareTerminal class="icon" :size="18" />
             <span>环境变量</span>
           </div>
+          <div
+            class="sider-item"
+            :class="{ activesec: activeTab === 'memory' }"
+            @click="activeTab = 'memory'"
+            v-if="userStore.isLoggedIn"
+          >
+            <Brain class="icon" :size="18" />
+            <span>记忆管理</span>
+          </div>
         </div>
 
         <div v-if="showStarCard" class="settings-star-card">
@@ -120,6 +129,14 @@
         </div>
         <div
           class="nav-item"
+          :class="{ active: activeTab === 'memory' }"
+          @click="activeTab = 'memory'"
+          v-if="userStore.isLoggedIn"
+        >
+          记忆管理
+        </div>
+        <div
+          class="nav-item"
           :class="{ active: activeTab === 'base' }"
           @click="activeTab = 'base'"
           v-if="userStore.isAdmin"
@@ -155,6 +172,10 @@
             <AgentEnvSettingsCard />
           </div>
 
+          <div v-if="activeTab === 'memory' && userStore.isLoggedIn">
+            <MemoryManagementComponent />
+          </div>
+
           <div v-show="activeTab === 'base'" v-if="userStore.isAdmin">
             <BasicSettingsSection />
           </div>
@@ -176,6 +197,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useUserStore } from '@/stores/user'
 import {
+  Brain,
   CircleUser,
   ExternalLink,
   Settings,
@@ -188,6 +210,7 @@ import {
 import AccountSettingsComponent from '@/components/AccountSettingsComponent.vue'
 import AgentEnvSettingsCard from '@/components/AgentEnvSettingsCard.vue'
 import BasicSettingsSection from '@/components/BasicSettingsSection.vue'
+import MemoryManagementComponent from '@/components/MemoryManagementComponent.vue'
 import UserManagementComponent from '@/components/UserManagementComponent.vue'
 import DepartmentManagementComponent from '@/components/DepartmentManagementComponent.vue'
 
@@ -218,7 +241,7 @@ const visible = computed({
 
 const availableTabs = computed(() => {
   const tabs = []
-  if (userStore.isLoggedIn) tabs.push('account', 'agentEnv')
+  if (userStore.isLoggedIn) tabs.push('account', 'agentEnv', 'memory')
   if (userStore.isAdmin) tabs.push('base', 'user')
   if (userStore.isSuperAdmin) tabs.push('department')
   return tabs

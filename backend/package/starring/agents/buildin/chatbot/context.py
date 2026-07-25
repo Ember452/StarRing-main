@@ -1,13 +1,14 @@
-﻿from dataclasses import dataclass, field
+from dataclasses import dataclass, field
 
 from starring.agents.context import BaseContext
 
 
-@dataclass(kw_only=True) # 表示所有的字段都要用关键字传参，不能按位传参
-class ChatBotContext(BaseContext): # 继承自 BaseContext，说明这是一个配置类
+@dataclass(kw_only=True)  # 表示所有的字段都要用关键字传参，不能按位传参
+class ChatBotContext(BaseContext):  # 继承自 BaseContext，说明这是一个配置类
     """
     用于配置和管理ChatBot上下文，特别是子智能体的控制和启用
     """
+
     subagents: list[str] | None = field(
         default=None,
         metadata={
@@ -30,5 +31,16 @@ class ChatBotContext(BaseContext): # 继承自 BaseContext，说明这是一个�
             "configurable": False,
             "hide": True,
             "description": "对话级开关：True 强制基于知识库回答，False 不用知识库。",
+        },
+    )
+
+    # 长期记忆开关（智能体静态配置）：开启后挂载 MemoryMiddleware，
+    # 提供 remember 工具 + 跨会话记忆召回注入；run 终结后异步抽取用户事实。
+    use_memory: bool = field(
+        default=False,
+        metadata={
+            "name": "长期记忆",
+            "description": "开启后智能体会记住用户的长期事实并在跨会话对话中参考（需要 Milvus，LITE 模式不生效）。",
+            "type": "boolean",
         },
     )

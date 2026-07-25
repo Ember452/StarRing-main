@@ -31,6 +31,7 @@ from starring.services.chat_service import stream_agent_chat, stream_agent_resum
 from starring.services.run_queue_service import (
     append_run_stream_event,
     clear_cancel_signal,
+    get_arq_pool,
     has_cancel_signal,
     wait_for_cancel_signal,
 )
@@ -60,6 +61,7 @@ class RunContext:
     ``start()`` 创建后台 watch task 订阅 Redis 取消通道；``is_cancelled()``
     被 ``process_agent_run`` 在每次 chunk 间隙调用，实现协作式取消。
     """
+
     run_id: str
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     _watch_task: asyncio.Task | None = None
@@ -110,6 +112,7 @@ class ChunkedEventWriter:
     """把高频的小块数据攒起来，攒够了再一次性写入数据库/Redis，避免频繁 I/O
     因为在LLM流式对话中，模型是一字一字吐数据的，如果每收到一个token就写，性能极差
     """
+
     def __init__(self, run_id: str, thread_id: str | None, interval_ms: int = 100, max_chars: int = 512):
         self.run_id = run_id
         self.thread_id = thread_id
@@ -150,6 +153,7 @@ class ChunkedEventWriter:
 
 
 async def _get_run(run_id: str):
+    """根据Run ID获取Agent运行记录"""
     async with pg_manager.get_async_session_context() as db:
         repo = AgentRunRepository(db)
         return await repo.get_run(run_id)
@@ -171,6 +175,37 @@ async def mark_run_terminal(run_id: str, status: str, error_type: str | None = N
         await repo.set_terminal_status(run_id, status=status, error_type=error_type, error_message=error_message)
         # 触发器状态钩子：若 run 来自触发器，更新对应 Trigger 的 last_run_status
         await _update_trigger_status_if_any(db, run_id, status)
+        # 长期记忆钩子：completed 的普通对话 run 且 Agent 开启 use_memory 时，异步抽取记忆
+        await _enqueue_memory_extraction_if_needed(db, run_id, status)
+
+
+async def _enqueue_memory_extraction_if_needed(db, run_id: str, status: str) -> None:
+    """若 run 满足条件则 enqueue 记忆抽取任务（异常仅记日志，不影响终结流程）。
+
+    跳过条件：非 completed / 触发器 run（自动任务无用户事实）/ 评估 run /
+    Agent 未开启 use_memory。_job_id 保证同一 run 幂等入队。
+    """
+    from starring.repositories.agent_repository import AgentRepository
+
+    if status != "completed":
+        return
+    try:
+        run = await AgentRunRepository(db).get_run(run_id)
+        if not run:
+            return
+        payload = run.input_payload or {}
+        if payload.get("trigger_id") or isinstance(payload.get("evaluation"), dict):
+            return
+        agent = await AgentRepository(db).get_by_slug(run.agent_id)
+        if not agent:
+            return
+        if not (agent.config_json or {}).get("context", {}).get("use_memory"):
+            return
+        queue = await get_arq_pool()
+        await queue.enqueue_job("extract_run_memories", run_id, _job_id=f"memory:{run_id}")
+        logger.info(f"Enqueued memory extraction for run {run_id}")
+    except Exception as e:
+        logger.warning(f"Failed to enqueue memory extraction for run {run_id}: {e}")
 
 
 async def _update_trigger_status_if_any(db, run_id: str, status: str) -> None:
@@ -194,6 +229,7 @@ async def _update_trigger_status_if_any(db, run_id: str, status: str) -> None:
 
 
 async def _load_user(uid: str):
+    """根据run记录里面的uid去数据库中加载用户"""
     async with pg_manager.get_async_session_context() as db:
         result = await db.execute(select(User).where(User.uid == uid, User.is_deleted == 0))
         return result.scalar_one_or_none()
@@ -301,9 +337,12 @@ async def _append_end_event(run_id: str, status: str, *, thread_id: str | None, 
 
 
 async def _consume_stream_with_cancel(agen, run_ctx: RunContext):
+    """
+    安全的从异步生成器Agen中消费数据，同时能响应外部取消信号
+    """
     while True:
-        next_task = asyncio.create_task(agen.__anext__())
-        cancel_task = asyncio.create_task(run_ctx.wait_cancelled())
+        next_task = asyncio.create_task(agen.__anext__())  # 等待异步生成器返回下一个值
+        cancel_task = asyncio.create_task(run_ctx.wait_cancelled())  # 等待取消信号
         done, _ = await asyncio.wait({next_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED)
 
         if cancel_task in done:
@@ -427,8 +466,8 @@ async def process_agent_run(ctx, run_id: str):
             else:
                 # 返回一个异步生成器，产出对AI的响应
                 stream = stream_agent_chat(
-                    query=query, # TODO Expected type 'str', got 'Any | None' instead
-                    agent_id=config.get("agent_id") or agent_id, # TODO Expected type 'str', got 'Any | None' instead
+                    query=query,  # TODO Expected type 'str', got 'Any | None' instead
+                    agent_id=config.get("agent_id") or agent_id,  # TODO Expected type 'str', got 'Any | None' instead
                     thread_id=thread_id,
                     meta=meta,
                     image_content=image_content,
@@ -439,7 +478,7 @@ async def process_agent_run(ctx, run_id: str):
 
             # 流式消费：_consume_stream_with_cancel 在每个 chunk 间隙检查取消信号
             async for chunk_bytes in _consume_stream_with_cancel(stream, run_ctx):
-                for chunk in _iter_json_chunks(chunk_bytes): # 把字节流解析层json
+                for chunk in _iter_json_chunks(chunk_bytes):  # 把字节流解析层json
                     target_thread_id = _chunk_thread_id(chunk, thread_id)
                     # loading chunk（LLM token 流）走攒批写入，避免每个 token 一次 I/O
                     if chunk.get("status") == "loading":
@@ -610,22 +649,50 @@ async def execute_trigger_run(ctx: dict, trigger_id: str, scheduled_time_iso: st
     from starring.services.trigger.service import execute_trigger
 
     del ctx
-    return await execute_trigger(
-        trigger_id=trigger_id, scheduled_time_iso=scheduled_time_iso
-    )
+    return await execute_trigger(trigger_id=trigger_id, scheduled_time_iso=scheduled_time_iso)
+
+
+async def execute_kb_sync(ctx: dict, trigger_id: str, scheduled_time_iso: str) -> dict:
+    """ARQ 任务入口：执行到点的 kb_sync 触发器（知识库定时同步）。
+
+    由 scan_triggers 元任务按 trigger_type 分流 enqueue。
+    """
+    from starring.services.trigger.kb_sync import execute_kb_sync as _execute_kb_sync
+
+    del ctx
+    return await _execute_kb_sync(trigger_id=trigger_id, scheduled_time_iso=scheduled_time_iso)
+
+
+async def extract_run_memories(ctx: dict, run_id: str) -> dict:
+    """ARQ 任务入口：run 终结后抽取长期记忆。
+
+    由 mark_run_terminal 的记忆钩子 enqueue；异常仅记日志不重试扩散
+    （记忆抽取属尽力而为的后台任务，失败不应影响对话链路）。
+    """
+    from starring.memory.service import extract_memories_from_run
+
+    del ctx
+    try:
+        added = await extract_memories_from_run(run_id)
+        return {"run_id": run_id, "added": len(added)}
+    except Exception as e:
+        logger.error(f"Memory extraction task failed for run {run_id}: {e}")
+        return {"run_id": run_id, "added": 0, "error": str(e)}
 
 
 class WorkerSettings:
     """ARQ worker 配置入口，由 ``arq worker`` 进程读取。
 
-    - ``functions``: 注册两类任务 - ``process_agent_run``（主对话 run）与
-      ``execute_trigger_run``（触发器执行）
+    - ``functions``: 注册四类任务 - ``process_agent_run``（主对话 run）、
+      ``execute_trigger_run``（触发器执行）、``execute_kb_sync``（知识库定时同步）
+      与 ``extract_run_memories``（长期记忆抽取）
     - ``max_tries``: 单任务最大重试次数（含首次执行）
     - ``job_timeout``: 单任务最大执行时长（秒），超时由 ARQ 强制 cancel
     - ``cron_jobs``: 注册 ``scan_triggers`` 元任务，每分钟第 0 秒执行一次
     - ``on_startup`` / ``on_shutdown``: 生命周期钩子，初始化与释放 PG 连接
     """
-    functions = [process_agent_run, execute_trigger_run]
+
+    functions = [process_agent_run, execute_trigger_run, execute_kb_sync, extract_run_memories]
     max_tries = 2
     retry_jobs = True
     job_timeout = 3600
