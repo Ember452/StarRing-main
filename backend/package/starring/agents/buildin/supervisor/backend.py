@@ -11,6 +11,7 @@
 
 设计依据：docs/vibe/P1-A-Supervisor细化设计-20260719.md §三
 """
+
 from __future__ import annotations
 
 try:
@@ -22,12 +23,14 @@ from langchain.agents.middleware import ModelRetryMiddleware, TodoListMiddleware
 
 from starring.agents import BaseAgent, load_chat_model, resolve_chat_model_spec
 from starring.agents.backends import create_agent_filesystem_middleware
+from starring.agents.buildin.chatbot.prompt import TODO_MID_PROMPT
+from starring.agents.buildin.chatbot.state import ChatBotState
 from starring.agents.context import (
+    DEFAULT_STARRING_SUMMARY_PROMPT,
     DEFAULT_SUMMARY_KEEP_MESSAGES,
     DEFAULT_SUMMARY_THRESHOLD_K,
     DEFAULT_SUMMARY_TOOL_RESULT_TOKEN_LIMIT,
     DEFAULT_TOOL_RESULT_EVICTION_K_TOKENS,
-    DEFAULT_STARRING_SUMMARY_PROMPT,
     prepare_agent_runtime_context,
 )
 from starring.agents.middlewares import (
@@ -36,8 +39,6 @@ from starring.agents.middlewares import (
     save_attachments_to_fs,
 )
 from starring.agents.middlewares.subagent_task import create_subagent_task_middleware
-from starring.agents.buildin.chatbot.prompt import TODO_MID_PROMPT
-from starring.agents.buildin.chatbot.state import ChatBotState
 from starring.utils.datetime_utils import shanghai_now
 
 from .context import SupervisorContext
@@ -125,6 +126,7 @@ class SupervisorAgent(BaseAgent):
 
     典型场景：多角色协作（写作 + 审稿 + 翻译）
     """
+
     name = "Supervisor 智能体"
     description = "多角色协作编排器，强制通过 task 工具委派给子智能体。适用于写作+审稿、翻译+校对等显式角色协作场景。"
     capabilities = ["file_upload", "files"]

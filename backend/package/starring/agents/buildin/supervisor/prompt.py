@@ -9,6 +9,7 @@
 StarRingSubAgentMiddleware 通过 wrap_model_call 注入的
 TASK_SYSTEM_PROMPT 提供，避免重复。
 """
+
 from __future__ import annotations
 
 SUPERVISOR_SYSTEM_PROMPT = """## 你的角色

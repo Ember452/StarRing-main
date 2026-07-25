@@ -4,17 +4,21 @@
 - start-end 节点：start 写入用户输入，end 合成最终输出
 - llm 节点：调用 LLM 并解析输出为 SubAgentDeliverable
 - condition 节点：safe_eval 求值与 Command(goto=...) 跳转
-- application-call 节点：调用其他 agent 并返回 deliverable
+- application-call 节点：按 slug 查库解析智能体并调用（tool 节点与新字段见
+  test_workflow_tool_nodes.py）
 
-设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §五、§八.3
+设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §五、§八.3；
+         docs/vibe/P2-工作流工具生态扩展细化设计-20260725.md §三
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from pydantic import ValidationError
 
 from starring.agents.buildin.workflow.context import WorkflowContext
 from starring.agents.buildin.workflow.definition import Node
@@ -90,15 +94,20 @@ async def test_end_node_synthesizes_all_node_outputs():
 
 @pytest.mark.asyncio
 async def test_start_end_node_invalid_kind_raises():
-    """start-end 节点 config.kind 非法时应抛 ValueError。"""
+    """start-end 节点 config.kind 非法时定义校验与执行器均应 fail-fast。"""
     from starring.agents.buildin.workflow.nodes.start_end import execute_start_end
 
-    state = {"messages": []}
-    node = Node(id="x", node_type="start-end", config={"kind": "middle"})
+    # 定义层：Node 构造期即拦截
+    with pytest.raises(ValidationError, match="kind"):
+        Node(id="x", node_type="start-end", config={"kind": "middle"})
+
+    # 执行器层兜底：绕过定义校验直接改 config 也应抛错
+    node = Node(id="x", node_type="start-end", config={"kind": "start"})
+    node.config["kind"] = "middle"
     ctx = WorkflowContext()
 
     with pytest.raises(ValueError, match="必须为 'start' 或 'end'"):
-        await execute_start_end(state, node, ctx)
+        await execute_start_end({"messages": []}, node, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -281,9 +290,56 @@ async def test_condition_node_skips_invalid_expression():
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class _FakeTargetContext:
+    """目标智能体的 context_schema 替身（真 dataclass，供嵌套探测用 dataclass_fields）。"""
+
+    thread_id: str = ""
+    uid: str = ""
+    run_id: str = ""
+    request_id: str = ""
+    system_prompt: str = ""
+
+    def update_from_dict(self, data):
+        for key, value in data.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+
+
+def _patch_agent_resolution(agent_item, *, agent_config=None):
+    """patch application-call 的 DB 解析链路（pg_manager / 仓库 / normalize）。"""
+    fake_db = MagicMock()
+
+    class _SessionCtx:
+        async def __aenter__(self):
+            return fake_db
+
+        async def __aexit__(self, *args):
+            return False
+
+    fake_pg = MagicMock()
+    fake_pg.get_async_session_context = MagicMock(return_value=_SessionCtx())
+
+    fake_user_repo_cls = MagicMock()
+    fake_user_repo_cls.return_value.get_by_uid_with_db = AsyncMock(return_value=SimpleNamespace(uid="user-1"))
+
+    fake_agent_repo_cls = MagicMock()
+    fake_agent_repo_cls.return_value.get_visible_by_slug = AsyncMock(return_value=agent_item)
+
+    return (
+        patch("starring.storage.postgres.manager.pg_manager", fake_pg),
+        patch("starring.repositories.user_repository.UserRepository", fake_user_repo_cls),
+        patch("starring.repositories.agent_repository.AgentRepository", fake_agent_repo_cls),
+        patch(
+            "starring.agents.context.normalize_agent_context_config",
+            AsyncMock(return_value=agent_config or {}),
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_application_call_node_invokes_target_agent():
-    """application-call 节点应调用目标 agent 并返回 SubAgentDeliverable。"""
+    """application-call 节点应按 slug 查库解析并调用目标 agent，返回 SubAgentDeliverable。"""
     from starring.agents.buildin.workflow.nodes.application_call import (
         execute_application_call,
     )
@@ -304,13 +360,10 @@ async def test_application_call_node_invokes_target_agent():
         request_id="req-1",
     )
 
-    # mock agent_manager
+    agent_item = SimpleNamespace(backend_id="TargetBackend", config_json={"context": {}})
+
     fake_agent = MagicMock()
-    fake_context_schema = MagicMock()
-    fake_context_instance = MagicMock()
-    fake_context_schema.return_value = fake_context_instance
-    fake_agent.context_schema = fake_context_schema
-    fake_agent._get_checkpointer = AsyncMock(return_value=None)
+    fake_agent.context_schema = _FakeTargetContext
     fake_graph = MagicMock()
     fake_graph.ainvoke = AsyncMock(return_value={
         "messages": [AIMessage(content="子 agent 回答")],
@@ -319,12 +372,16 @@ async def test_application_call_node_invokes_target_agent():
     fake_agent.get_graph = AsyncMock(return_value=fake_graph)
 
     fake_manager = MagicMock()
-    fake_manager._classes = {"target-agent": object()}
+    fake_manager._classes = {"TargetBackend": object()}
     fake_manager.get_agent = MagicMock(return_value=fake_agent)
 
-    with patch(
-        "starring.agents.buildin.workflow.nodes.application_call.agent_manager",
-        fake_manager,
+    patches = _patch_agent_resolution(agent_item)
+    with (
+        patch(
+            "starring.agents.buildin.workflow.nodes.application_call.agent_manager",
+            fake_manager,
+        ),
+        patches[0], patches[1], patches[2], patches[3],
     ):
         result = await execute_application_call(state, node, ctx)
 
@@ -333,11 +390,15 @@ async def test_application_call_node_invokes_target_agent():
     deliverable = result["node_outputs"]["call-1"]
     assert "子 agent 回答" in deliverable.raw_text
     assert "/tmp/output.txt" in deliverable.artifacts
+    # 运行时字段按 父线程:节点 派生
+    target_context = fake_agent.get_graph.call_args.kwargs["context"]
+    assert target_context.thread_id == "parent-thread:call-1"
+    assert target_context.uid == "user-1"
 
 
 @pytest.mark.asyncio
 async def test_application_call_node_raises_when_target_not_found():
-    """目标 agent 不存在时应抛 ValueError。"""
+    """目标智能体不存在或不可见时应抛 ValueError（错误信息含 slug）。"""
     from starring.agents.buildin.workflow.nodes.application_call import (
         execute_application_call,
     )
@@ -346,15 +407,92 @@ async def test_application_call_node_raises_when_target_not_found():
     node = Node(id="call-1", node_type="application-call", config={
         "target_agent_slug": "nonexistent-agent",
     })
-    ctx = WorkflowContext()
+    ctx = WorkflowContext(uid="user-1")
 
-    fake_manager = MagicMock()
-    fake_manager._classes = {}
-    fake_manager.get_agent = MagicMock(return_value=None)
-
-    with patch(
-        "starring.agents.buildin.workflow.nodes.application_call.agent_manager",
-        fake_manager,
-    ):
-        with pytest.raises(ValueError, match="未注册"):
+    patches = _patch_agent_resolution(agent_item=None)
+    with patches[0], patches[1], patches[2], patches[3]:
+        with pytest.raises(ValueError, match="nonexistent-agent.*不存在或无权限"):
             await execute_application_call(state, node, ctx)
+
+
+@pytest.mark.asyncio
+async def test_application_call_node_rejects_nested_workflow():
+    """目标 backend 的 context_schema 含 workflow_id 字段（工作流类）时应拒绝嵌套。"""
+    from starring.agents.buildin.workflow.nodes.application_call import (
+        execute_application_call,
+    )
+
+    @dataclass
+    class _WorkflowLikeContext:
+        workflow_id: str = ""
+        thread_id: str = ""
+
+    state = {"messages": [], "node_outputs": {}}
+    node = Node(id="call-1", node_type="application-call", config={
+        "target_agent_slug": "nested-workflow",
+    })
+    ctx = WorkflowContext(uid="user-1")
+
+    agent_item = SimpleNamespace(backend_id="WorkflowBackend", config_json=None)
+    fake_agent = MagicMock()
+    fake_agent.context_schema = _WorkflowLikeContext
+    fake_manager = MagicMock()
+    fake_manager._classes = {"WorkflowBackend": object()}
+    fake_manager.get_agent = MagicMock(return_value=fake_agent)
+
+    patches = _patch_agent_resolution(agent_item)
+    with (
+        patch(
+            "starring.agents.buildin.workflow.nodes.application_call.agent_manager",
+            fake_manager,
+        ),
+        patches[0], patches[1], patches[2], patches[3],
+    ):
+        with pytest.raises(ValueError, match="不允许嵌套"):
+            await execute_application_call(state, node, ctx)
+
+
+@pytest.mark.asyncio
+async def test_application_call_node_injects_agent_config():
+    """智能体 config_json.context 应注入 target_context，运行时字段最后覆盖。"""
+    from starring.agents.buildin.workflow.nodes.application_call import (
+        execute_application_call,
+    )
+
+    state = {"messages": [], "node_outputs": {}}
+    node = Node(id="call-1", node_type="application-call", config={
+        "target_agent_slug": "custom-agent",
+    })
+    ctx = WorkflowContext(thread_id="t", uid="user-1", run_id="r", request_id="q")
+
+    agent_item = SimpleNamespace(
+        backend_id="TargetBackend",
+        config_json={"context": {"system_prompt": "自定义提示词", "thread_id": "脏数据"}},
+    )
+    fake_agent = MagicMock()
+    fake_agent.context_schema = _FakeTargetContext
+    fake_graph = MagicMock()
+    fake_graph.ainvoke = AsyncMock(return_value={"messages": [AIMessage(content="ok")]})
+    fake_agent.get_graph = AsyncMock(return_value=fake_graph)
+    fake_manager = MagicMock()
+    fake_manager._classes = {"TargetBackend": object()}
+    fake_manager.get_agent = MagicMock(return_value=fake_agent)
+
+    # normalize 原样回传 context 配置，验证注入与运行时覆盖的先后顺序
+    patches = _patch_agent_resolution(
+        agent_item, agent_config={"system_prompt": "自定义提示词", "thread_id": "脏数据"}
+    )
+    with (
+        patch(
+            "starring.agents.buildin.workflow.nodes.application_call.agent_manager",
+            fake_manager,
+        ),
+        patches[0], patches[1], patches[2], patches[3],
+    ):
+        await execute_application_call(state, node, ctx)
+
+    target_context = fake_agent.get_graph.call_args.kwargs["context"]
+    # 用户配置生效
+    assert target_context.system_prompt == "自定义提示词"
+    # 运行时字段覆盖配置里的脏 thread_id
+    assert target_context.thread_id == "t:call-1"

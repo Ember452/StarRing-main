@@ -1,4 +1,4 @@
-﻿"""思维导图工具函数。"""
+"""思维导图工具函数。"""
 
 import copy
 import json

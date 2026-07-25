@@ -1,4 +1,4 @@
-﻿"""
+"""
 PP-Structure-V3 文档解析器
 
 使用 PP-Structure-V3 进行文档版面解析和内容提取

@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import os
 
 from starring.knowledge.base import KBNotFoundError, KnowledgeBase
@@ -478,6 +478,7 @@ class KnowledgeBaseManager:
         # 添加数据库中的附加字段
         db_info["additional_params"] = kb_instance.normalize_additional_params(kb.additional_params)
         db_info["share_config"] = kb.share_config or DEFAULT_SHARE_CONFIG.copy()
+        db_info["created_by"] = kb.created_by
         db_info["mindmap"] = kb.mindmap
         db_info["sample_questions"] = kb.sample_questions or []
         db_info["query_params"] = kb.query_params

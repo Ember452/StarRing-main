@@ -1,4 +1,4 @@
-﻿from starring.knowledge.parser.base import (
+from starring.knowledge.parser.base import (
     BaseDocumentProcessor,
     DocumentParserException,
     DocumentProcessorException,

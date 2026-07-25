@@ -1,4 +1,4 @@
-﻿"""模型供应商配置数据访问层。"""
+"""模型供应商配置数据访问层。"""
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

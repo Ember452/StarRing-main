@@ -1,4 +1,4 @@
-﻿"""Token usage observation middleware for starring agents."""
+"""Token usage observation middleware for starring agents."""
 
 from __future__ import annotations
 

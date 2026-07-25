@@ -1,4 +1,4 @@
-﻿"""Attachment prompt injection middleware.
+"""Attachment prompt injection middleware.
 
 Read uploaded file metadata from LangGraph state and inject readable paths
 into the system prompt so the model can use `read_file` on demand.

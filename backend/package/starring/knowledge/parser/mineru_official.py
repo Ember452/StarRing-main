@@ -1,4 +1,4 @@
-﻿"""
+"""
 MinerU Official 解析器
 
 使用 MinerU 官方云服务 API 进行文档解析

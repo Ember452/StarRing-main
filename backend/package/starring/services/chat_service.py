@@ -1212,6 +1212,7 @@ async def stream_agent_chat(
     # 记录开始时间，用于最终计算 time_cost
     start_time = asyncio.get_event_loop().time()
 
+    # **kwargs:收集关键字参数，放到一个字典中
     def make_chunk(content=None, **kwargs):
         """构造一个 NDJSON chunk（以 ``\\n`` 结尾的字节串）。
 
@@ -1228,7 +1229,7 @@ async def stream_agent_chat(
         )
 
     # ==================== 1. 请求元数据初始化 ====================
-    # 确保 meta 为可写字典，若调用方未传入 request_id 则自动生成
+    # 确保 meta 为可写字典，若调用方未传入 request_id 则自动生成 36位字符串
     meta = dict(meta or {})
     if "request_id" not in meta or not meta.get("request_id"):
         logger.warning("请求缺少 request_id，已自动生成一个新的 request_id")
@@ -1257,6 +1258,7 @@ async def stream_agent_chat(
     # ==================== 3. 输入侧敏感词拦截 ====================
     # 在进入智能体之前先对用户输入做一次敏感词检查，
     # 命中则直接返回 error chunk，不执行后续逻辑
+    # 进行比对拦截和llm拦截双重拦截，避免误判
     if conf.enable_content_guard and await content_guard.check(query):
         yield make_chunk(
             status="error", error_type="content_guard_blocked", error_message="输入内容包含敏感词", meta=meta
@@ -1634,12 +1636,64 @@ async def stream_agent_resume(
 ) -> AsyncIterator[bytes]:
     """中断恢复入口：根据用户对 interrupt 的回答继续执行智能体。
 
-    通过 LangGraph 的 ``Command(resume=...)`` 把 ``resume_input`` 注入到上次中断的节点，
-    后续流式处理逻辑与 ``stream_agent_chat`` 后半段一致（事件转换、状态推送、消息落库）。
+    参数说明
+    --------
+    thread_id : str
+        对话线程 ID。resume 必须基于已有线程（由上次 interrupt 产生）。
+    resume_input : Any
+        用户对 interrupt 问题的回答，通过 ``Command(resume=...)`` 注入到中断节点。
+    meta : dict
+        请求元数据，可包含 ``request_id``、``run_id`` 等字段。
+    current_user : User
+        当前登录用户对象。
+    db : AsyncSession
+        当前请求的数据库会话。
+
+    返回值
+    -------
+    AsyncIterator[bytes]
+        以 NDJSON 格式（每行一个 JSON 对象，以 ``\\n`` 结尾）持续 yield 的字节流。
+
+    输出 chunk 的 ``status`` 序列大致为
+    ------------------------------------
+    ``init`` → (多个 ``loading`` / ``agent_state`` / ``stream_event``) → ``finished``
+
+    各 status 含义与 ``stream_agent_chat`` 一致：
+    - ``init``：恢复开始，供前端感知 resume 已启动。
+    - ``loading``：AI 生成内容的增量 chunk。
+    - ``agent_state``：智能体运行时状态快照（如当前工具调用进度）。
+    - ``stream_event``：底层协议事件透传（如子智能体的工具调用事件）。
+    - ``finished``：恢复执行正常结束。
+    - ``interrupted``：恢复执行被中断（客户端断连）。
+    - ``error``：发生错误。
+
+    与 ``stream_agent_chat`` 的区别
+    -------------------------------
+    1. 无需构造用户消息（HumanMessage）和做输入侧敏感词检查——resume_input 由
+       LangGraph 直接注入中断节点，不经过消息管道。
+    2. 无需用户消息落库——resume 的回答由 LangGraph 内部写入 state，
+       最终在 ``save_messages_from_langgraph_state`` 中统一落库。
+    3. 智能体解析时 ``requested_agent_id=None``，因为 resume 必须基于已有线程，
+       由线程绑定的智能体决定运行时。
+    4. 通过 ``agent.stream_resume_with_state`` 而非 ``_stream_agent_events``
+       获取流式事件，底层使用 ``Command(resume=...)`` 驱动。
+
+    异常处理
+    --------
+    - 客户端断连（``CancelledError`` / ``ConnectionError``）：在新 session 中
+      保存中断状态消息，便于后续重新打开时恢复。
+    - 其他异常：同样在新 session 中保存错误信息，并返回 ``error`` chunk。
+    - ``finally`` 块中调用 ``flush_langfuse()`` 确保 trace 数据被刷新。
     """
+    # 记录开始时间，用于最终计算 time_cost
     start_time = asyncio.get_event_loop().time()
 
     def make_resume_chunk(content=None, **kwargs):
+        """构造一个 NDJSON chunk（以 ``\\n`` 结尾的字节串）。
+
+        ``thread_id`` 优先取 kwargs 中显式传入（用于子智能体 chunk），
+        其次取 meta 中的，最后回退到外层 thread_id。
+        """
         chunk_thread_id = kwargs.pop("thread_id", None) or meta.get("thread_id") or thread_id
         return (
             json.dumps(
@@ -1649,13 +1703,20 @@ async def stream_agent_resume(
             + b"\n"
         )
 
+    # ==================== 1. 下发 init chunk（恢复开始标记） ====================
+    # 让前端感知到 resume 已启动，不等 AI 首 token
     yield make_resume_chunk(status="init", meta=meta)
 
-    # 构造 LangGraph resume 命令，将用户回答注入到上次中断的节点
+    # ==================== 2. 构造 LangGraph resume 命令 ====================
+    # Command(resume=...) 将用户的回答注入到上次 interrupt 中断的节点，
+    # LangGraph checkpointer 会自动从断点恢复执行
     resume_command = Command(resume=resume_input)
 
     uid = str(current_user.uid)
-    # resume 必须基于已有线程，故 requested_agent_id=None，由线程决定 agent
+
+    # ==================== 3. 解析智能体运行时 ====================
+    # resume 必须基于已有线程，故 requested_agent_id=None，
+    # 由线程绑定的智能体决定运行时（与 stream_agent_chat 的关键区别之一）
     try:
         agent_item, agent, agent_config = await _resolve_agent_runtime(
             db=db,
@@ -1664,11 +1725,18 @@ async def stream_agent_resume(
             thread_id=thread_id,
         )
     except ValueError as e:
+        # 智能体不存在或无权访问时返回 error
         yield make_resume_chunk(status="error", error_type="invalid_agent", error_message=str(e), meta=meta)
         return
 
+    # ==================== 4. 补充 meta 上下文信息 ====================
+    # 将智能体相关信息写入 meta，供后续 tracking 和日志使用
     meta["agent_id"] = agent_item.slug
     meta["backend_id"] = agent_item.backend_id
+
+    # ==================== 5. 构建输入上下文与 Langfuse 追踪 ====================
+    # 构建智能体输入上下文（含系统提示词、知识库、模型参数等），
+    # resume 时仍需重建上下文，因为智能体执行依赖这些配置
     input_context = await build_agent_input_context(
         agent_config or {},
         thread_id=thread_id,
@@ -1676,10 +1744,12 @@ async def stream_agent_resume(
         run_id=meta.get("run_id"),
         request_id=meta.get("request_id"),
     )
+    # 允许通过 meta 中的 model_override 字段覆盖模型选择
     _apply_model_override(input_context, meta)
     # context 用于后续 get_graph 重新读取 state（保持与首次执行一致的上下文）
     context = agent.context_schema()
     context.update(input_context)
+    # 初始化 Langfuse 追踪上下文，用于记录本次 resume 的全链路 trace
     langfuse_run = _build_langfuse_run_context(
         current_user=current_user,
         thread_id=thread_id,
@@ -1690,9 +1760,15 @@ async def stream_agent_resume(
         message_type="resume",
         meta=meta,
     )
+    # 累积状态变量
+    # trace_info：Langfuse 追踪信息，落库时附带
+    # last_agent_state_signature：上一次推送的 agent_state 签名，用于去重
     trace_info: dict[str, Any] = {}
     last_agent_state_signature = ""
 
+    # ==================== 6. 启动 resume 流式执行 ====================
+    # 通过 stream_resume_with_state 驱动 LangGraph 从中断点恢复执行，
+    # 返回的事件流格式与 stream_agent_chat 中的 _stream_agent_events 一致
     stream_source = agent.stream_resume_with_state(
         resume_command,
         input_context=input_context,
@@ -1701,11 +1777,19 @@ async def stream_agent_resume(
         tags=langfuse_run.tags,
     )
 
+    # protocol_message_ids：用于在同一 (thread_id, run_key) 下保持 message_id 稳定，
+    # 避免因流式协议多次下发同一逻辑消息而生成重复 ID
     protocol_message_ids: dict[tuple[str, str], str] = {}
 
     try:
+        # ============ 7. 流式事件主循环 ============
+        # 三种模式的事件（与 stream_agent_chat 完全一致）：
+        #   - values：智能体状态快照，仅在签名变化时下发 agent_state
+        #   - stream_event：底层协议事件透传（如子智能体工具调用进度）
+        #   - messages：AI 生成内容的增量 chunk（主智能体与子智能体）
         async for mode, payload in stream_source:
-            # values 模式：agent_state 快照更新
+            # ----- 7a. values 模式：state 快照推送 -----
+            # 仅在签名（agent_state 内容的哈希）变化时才下发，避免重复推送
             if mode == "values":
                 agent_state = extract_agent_state(payload if isinstance(payload, dict) else {})
                 signature = _agent_state_signature(agent_state)
@@ -1714,7 +1798,9 @@ async def stream_agent_resume(
                     yield make_resume_chunk(status="agent_state", agent_state=agent_state, meta=meta)
                 continue
 
-            # stream_event 模式：透传底层协议事件
+            # ----- 7b. stream_event 模式：底层协议事件透传 -----
+            # 如子智能体的工具调用开始/结束、进度更新等，
+            # 直接透传给前端，不做额外处理
             if mode == "stream_event":
                 event_payload = payload if isinstance(payload, dict) else {}
                 yield make_resume_chunk(
@@ -1729,11 +1815,14 @@ async def stream_agent_resume(
             if mode != "messages":
                 continue
 
-            # messages 模式：常规消息 chunk
+            # ----- 7c. messages 模式：AI 内容增量 chunk -----
+            # 包含主智能体和子智能体的消息，
+            # 子智能体 chunk 通过 namespace 和 thread_id 区分
             msg, metadata = payload
             metadata = dict(metadata or {})
             namespace = _metadata_namespace(metadata)
             chunk_thread_id = _metadata_thread_id(metadata, thread_id if not namespace else None)
+            # 子智能体 chunk 必须能解析出 thread_id，否则丢弃（无法关联上下文）
             if namespace and not chunk_thread_id:
                 continue
 
@@ -1741,6 +1830,7 @@ async def stream_agent_resume(
             if chunk_thread_id == thread_id:
                 trace_info = get_trace_info(langfuse_run)
 
+            # 将 LangGraph 消息转换为前端可消费的 stream_event 列表
             stream_events = _message_payload_STARRING_events(
                 msg,
                 metadata=metadata,
@@ -1751,6 +1841,9 @@ async def stream_agent_resume(
 
             for stream_event in stream_events:
                 content = _stream_event_response(stream_event)
+                # 下发 loading chunk 给前端
+                # 注意：resume 不做流式内容安全检查，因为 resume_input 是
+                # 对 interrupt 问题的回答，内容由 LangGraph 内部控制
                 yield make_resume_chunk(
                     content=content,
                     stream_event=stream_event,
@@ -1759,8 +1852,10 @@ async def stream_agent_resume(
                     thread_id=chunk_thread_id,
                 )
 
+        # ============ 8. 中断（Interrupt）处理 ============
+        # resume 同样可能再次进入 interrupt（多轮提问场景），
+        # 需要再次检查并下发 ask_user_question_required chunk
         langgraph_config = {"configurable": {"thread_id": thread_id, "uid": uid}}
-        # resume 同样可能再次进入 interrupt（多轮提问），需要再次检查
         interrupted = False
         async for chunk in check_and_handle_interrupts(agent, langgraph_config, make_resume_chunk, meta, thread_id):
             interrupted = True
@@ -1768,13 +1863,18 @@ async def stream_agent_resume(
 
         meta["time_cost"] = asyncio.get_event_loop().time() - start_time
 
+        # ============ 9. 最终 agent_state 补发 ============
+        # 流结束后读取最终 state，若与流中最后一次推送的签名不同则补发一次，
+        # 确保前端拿到最新的智能体状态
         agent_state = await _safe_extract_agent_state(agent, langgraph_config, context=context)
 
         final_signature = _agent_state_signature(agent_state)
         if final_signature and final_signature != last_agent_state_signature:
             yield make_resume_chunk(status="agent_state", agent_state=agent_state, meta=meta)
 
-        # 先存储数据库，再返回 finished，避免前端查询时数据未落库
+        # ============ 10. 消息落库 ============
+        # 先存储数据库，再返回 finished，
+        # 避免前端在 finished 后立即查询却发现数据未落库
         conv_repo = ConversationRepository(db)
         try:
             await save_messages_from_langgraph_state(
@@ -1790,15 +1890,20 @@ async def stream_agent_resume(
             logger.exception(f"Error saving messages from LangGraph state: {e}")
             yield make_resume_chunk(status="warning", message=f"消息保存失败: {e}", meta=meta)
 
+        # 若已被 interrupt，则不再发送 finished，等待前端再次 resume
         if interrupted:
             return
 
         yield make_resume_chunk(status="finished", meta=meta)
 
+    # ==================== 11. 异常处理 ====================
+
     except (asyncio.CancelledError, ConnectionError) as e:
-        # 客户端断连：保存中断状态消息，便于后续重新打开时恢复
+        # ---------- 11a. 客户端断连 ----------
+        # 场景：用户关闭页面、网络断开等导致 SSE 连接中断
         logger.warning(f"Client disconnected during resume: {e}")
 
+        # 在新 session 中保存中断状态消息，便于后续重新打开时恢复
         async with pg_manager.get_async_session_context() as new_db:
             new_conv_repo = ConversationRepository(new_db)
             await save_partial_message(
@@ -1814,8 +1919,11 @@ async def stream_agent_resume(
         yield make_resume_chunk(status="interrupted", message="对话恢复已中断", meta=meta)
 
     except Exception as e:
+        # ---------- 11b. 其他运行时异常 ----------
+        # 场景：智能体执行错误、数据库异常、网络超时等
         logger.exception(f"Error during resume: {e}")
 
+        # 在新 session 中保存错误信息，便于后续追溯和调试
         async with pg_manager.get_async_session_context() as new_db:
             new_conv_repo = ConversationRepository(new_db)
             await save_partial_message(
@@ -1830,6 +1938,9 @@ async def stream_agent_resume(
 
         yield make_resume_chunk(message=f"Error during resume: {e}", status="error")
     finally:
+        # ==================== 12. 清理 ====================
+        # 确保 Langfuse 缓冲的 trace 事件被推送到远端，
+        # 无论正常结束还是异常退出都会执行
         flush_langfuse()
 
 

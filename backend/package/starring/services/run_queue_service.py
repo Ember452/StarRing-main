@@ -187,14 +187,16 @@ async def has_cancel_signal(run_id: str) -> bool:
 
 async def wait_for_cancel_signal(run_id: str, poll_timeout_seconds: float = 1.0) -> bool:
     """阻塞等待 run 的取消信号，超时返回 False。
-
+    Redis Pub/Sub：处理实时通知
     优先检查 key（处理 worker 重连后的延迟信号），随后订阅 pub/sub 通道。
     ``poll_timeout_seconds`` 控制单次 pub/sub 轮询超时，外层调用方可定期 re-check。
     """
+    # 首先通过检查key是否还存在，判断是否已经取消
     if await has_cancel_signal(run_id):
         return True
 
     try:
+        # 从Redis的pubsub中等待实时消息，判断是否是ren_id
         async with redis_pubsub(RUN_CANCEL_CHANNEL) as pubsub:
             while True:
                 msg = await pubsub.get_message(
@@ -229,7 +231,7 @@ async def append_run_stream_event(run_id: str, event_type: str, payload: dict, *
     保证前端按统一 schema 解析；stream TTL 默认 2 小时，超长 stream 由
     ``RUN_EVENTS_STREAM_MAXLEN`` 控制容量（0 表示不裁剪）。
     """
-    redis = await get_redis_client() # await把当前协程挂起，并等待他完成结果
+    redis = await get_redis_client()  # await把当前协程挂起，并等待他完成结果
     key = _event_stream_key(run_id)
     now = datetime.now(tz=UTC)
     now_ms = int(now.timestamp() * 1000)
@@ -252,8 +254,8 @@ async def append_run_stream_event(run_id: str, event_type: str, payload: dict, *
     # 容量控制：maxlen=0 表示不裁剪；approximate 模式下 Redis 延迟裁剪，吞吐更高
     kwargs = {}
     if RUN_EVENTS_STREAM_MAXLEN > 0:
-        kwargs["maxlen"] = RUN_EVENTS_STREAM_MAXLEN # 设置最大有效长度
-        kwargs["approximate"] = True # 开启近似模式，Redis不会立即裁剪，允许Stream超过最大长度，性能好
+        kwargs["maxlen"] = RUN_EVENTS_STREAM_MAXLEN  # 设置最大有效长度
+        kwargs["approximate"] = True  # 开启近似模式，Redis不会立即裁剪，允许Stream超过最大长度，性能好
 
     event_id = await redis.xadd(key, fields, **kwargs)
     # 每次写入后刷新 TTL，保证活跃 run 的 stream 不会被过早回收

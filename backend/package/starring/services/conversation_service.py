@@ -1,4 +1,4 @@
-﻿import uuid
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote

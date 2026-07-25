@@ -1,4 +1,4 @@
-﻿"""MCP 服务器数据访问层 - Repository"""
+"""MCP 服务器数据访问层 - Repository"""
 
 from __future__ import annotations
 

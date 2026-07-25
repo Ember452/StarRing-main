@@ -251,7 +251,9 @@ async def _run_install_task(
                 preparation.cleanup()
 
         current_skills = normalize_string_list(getattr(runtime_context, "skills", None))
-        await asyncio.to_thread(sync_thread_readable_skills, thread_id, normalize_string_list(current_skills + installed_slugs))
+        await asyncio.to_thread(
+            sync_thread_readable_skills, thread_id, normalize_string_list(current_skills + installed_slugs)
+        )
 
         lines = []
         if installed_slugs:

@@ -1,4 +1,4 @@
-﻿# Base classes - 核心基类
+# Base classes - 核心基类
 from starring.agents.base import BaseAgent
 
 # 从 buildin 模块导入 agent_manager

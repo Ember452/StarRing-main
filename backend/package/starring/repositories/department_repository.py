@@ -1,4 +1,4 @@
-﻿"""部门数据访问层 - Repository"""
+"""部门数据访问层 - Repository"""
 
 from typing import Any
 

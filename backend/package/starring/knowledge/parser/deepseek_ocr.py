@@ -1,4 +1,4 @@
-﻿"""
+"""
 DeepSeek OCR Parser
 
 Uses DeepSeek-OCR via SiliconFlow API for document parsing and OCR.

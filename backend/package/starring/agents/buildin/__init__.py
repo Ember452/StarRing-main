@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import importlib
 import inspect
 from pathlib import Path

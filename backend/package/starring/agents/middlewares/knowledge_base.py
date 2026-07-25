@@ -1,4 +1,4 @@
-﻿"""知识库中间件 - 提供通用知识库工具"""
+"""知识库中间件 - 提供通用知识库工具"""
 
 from langchain.agents.middleware import AgentMiddleware
 

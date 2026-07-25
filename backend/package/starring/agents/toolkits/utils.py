@@ -1,4 +1,4 @@
-﻿import traceback
+import traceback
 from typing import Any
 
 from starring.utils import logger

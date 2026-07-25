@@ -13,11 +13,11 @@ from starring.agents.backends import create_agent_filesystem_middleware
 from starring.agents.buildin.chatbot.prompt import TODO_MID_PROMPT, build_prompt_with_context
 from starring.agents.buildin.subagent.context import SubAgentContext
 from starring.agents.context import (
+    DEFAULT_STARRING_SUMMARY_PROMPT,
     DEFAULT_SUMMARY_KEEP_MESSAGES,
     DEFAULT_SUMMARY_THRESHOLD_K,
     DEFAULT_SUMMARY_TOOL_RESULT_TOKEN_LIMIT,
     DEFAULT_TOOL_RESULT_EVICTION_K_TOKENS,
-    DEFAULT_STARRING_SUMMARY_PROMPT,
     prepare_agent_runtime_context,
 )
 from starring.agents.middlewares import TokenUsageMiddleware, create_summary_middleware, save_attachments_to_fs
@@ -110,7 +110,7 @@ async def _build_middlewares(context):
         SkillsMiddleware(),
         summary_middleware,
         TodoListMiddleware(system_prompt=TODO_MID_PROMPT),
-        *( [PatchToolCallsMiddleware()] if PatchToolCallsMiddleware is not None else [] ),
+        *([PatchToolCallsMiddleware()] if PatchToolCallsMiddleware is not None else []),
         _SubAgentToolFilterMiddleware(),
         ModelRetryMiddleware(),
         TokenUsageMiddleware(),

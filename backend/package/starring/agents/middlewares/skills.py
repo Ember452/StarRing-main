@@ -1,4 +1,4 @@
-﻿"""Skills 中间件 - 处理 skills 提示词注入、依赖展开、动态激活"""
+"""Skills 中间件 - 处理 skills 提示词注入、依赖展开、动态激活"""
 
 from __future__ import annotations
 

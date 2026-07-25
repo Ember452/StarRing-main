@@ -45,13 +45,26 @@ _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
 
 # 已知支持视觉输入的模型名称模式（litellm.supports_vision 对部分模型不准确，作为补充）
 _KNOWN_VISION_MODEL_PATTERNS = (
-    "gpt-4o", "gpt-4-turbo", "gpt-4-vision", "gpt-4o-mini",
-    "claude-3", "claude-sonnet", "claude-opus", "claude-haiku",
-    "gemini-1.5", "gemini-2", "gemini-pro-vision",
-    "qwen-vl", "qwen2-vl", "qwen2.5-vl",
-    "glm-4v", "glm-4.5v",
-    "internvl", "intern-vl",
-    "llava", "pixtral",
+    "gpt-4o",
+    "gpt-4-turbo",
+    "gpt-4-vision",
+    "gpt-4o-mini",
+    "claude-3",
+    "claude-sonnet",
+    "claude-opus",
+    "claude-haiku",
+    "gemini-1.5",
+    "gemini-2",
+    "gemini-pro-vision",
+    "qwen-vl",
+    "qwen2-vl",
+    "qwen2.5-vl",
+    "glm-4v",
+    "glm-4.5v",
+    "internvl",
+    "intern-vl",
+    "llava",
+    "pixtral",
 )
 
 

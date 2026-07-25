@@ -1,4 +1,4 @@
-﻿"""
+"""
 MinIO 存储客户端
 简化的 MinIO 对象存储操作
 """
@@ -11,8 +11,8 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from io import BytesIO
 
-from urllib3 import BaseHTTPResponse
 from starring.utils import logger
+from urllib3 import BaseHTTPResponse
 
 from minio import Minio
 from minio.error import S3Error

@@ -1,4 +1,4 @@
-﻿"""通用的 Context 相关中间件"""
+"""通用的 Context 相关中间件"""
 
 from collections.abc import Callable
 

@@ -1,4 +1,4 @@
-﻿"""starring adapter for DeepAgents conversation summarization middleware.
+"""starring adapter for DeepAgents conversation summarization middleware.
 
 本模块基于 DeepAgents 的 SummarizationMiddleware 进行扩展，提供了 StarRing 项目
 特有的工具调用结果脱敏（sanitization）与摘要能力。

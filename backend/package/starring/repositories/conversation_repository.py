@@ -1,4 +1,4 @@
-﻿"""
+"""
 对话域持久化 Repository（Async）
 """
 
@@ -18,6 +18,7 @@ MAX_CONVERSATION_TITLE_LENGTH = 255
 
 class ConversationRepository:
     """是一个数据访问层，用来处理与对话相关的所有数据库操作，封装了业务逻辑与数据库之间的交互"""
+
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
 

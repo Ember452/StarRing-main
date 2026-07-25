@@ -9,6 +9,7 @@ P1-A 软编排 Supervisor 模式：强制通过 task 工具委派给子智能体
 
 设计依据：docs/vibe/P1-A-Supervisor细化设计-20260719.md
 """
+
 from .backend import SupervisorAgent
 
 __all__ = ["SupervisorAgent"]

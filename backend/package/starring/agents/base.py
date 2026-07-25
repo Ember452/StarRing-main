@@ -6,8 +6,8 @@ StarRing 智能体基础框架。
 后端切换（SQLite / PostgreSQL / 内存）、流式输出与子智能体路由等
 通用能力，子类只需实现 get_graph() 即可获得完整的运行能力。
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 import asyncio
 import os
@@ -567,9 +567,7 @@ class BaseAgent:
             except Exception as e:
                 # SQLite 不可用时降级到 InMemorySaver，生产环境可能导致状态丢失（每次重启丢失所有对话状态）
                 # 默认允许回退（保持现有行为），可通过环境变量 ALLOW_INMEMORY_CHECKPOINTER_FALLBACK=false 强制 fail-fast
-                allow_fallback = os.getenv(
-                    "ALLOW_INMEMORY_CHECKPOINTER_FALLBACK", "true"
-                ).strip().lower() != "false"
+                allow_fallback = os.getenv("ALLOW_INMEMORY_CHECKPOINTER_FALLBACK", "true").strip().lower() != "false"
                 if not allow_fallback:
                     raise RuntimeError(
                         f"构建 sqlite checkpointer 失败且 ALLOW_INMEMORY_CHECKPOINTER_FALLBACK=false，"

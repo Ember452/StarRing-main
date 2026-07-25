@@ -191,9 +191,7 @@ def _parse_deliverable(messages: list, artifacts_from_state: list[str]) -> SubAg
     5. 完全无输出 → EMPTY_DELIVERABLE
     artifacts_from_state 始终保留（来自子智能体 state.artifacts）。
     """
-    all_text = "\n\n".join(
-        msg.text for msg in reversed(messages) if isinstance(msg, AIMessage) and msg.text
-    )
+    all_text = "\n\n".join(msg.text for msg in reversed(messages) if isinstance(msg, AIMessage) and msg.text)
 
     if not all_text:
         return EMPTY_DELIVERABLE.model_copy(update={"artifacts": artifacts_from_state})
@@ -217,9 +215,7 @@ def _parse_deliverable(messages: list, artifacts_from_state: list[str]) -> SubAg
         )
 
     # 合并 artifacts：fenced block 中的优先，state.artifacts 补充
-    merged_artifacts = list(dict.fromkeys(
-        list(payload.get("artifacts") or []) + artifacts_from_state
-    ))
+    merged_artifacts = list(dict.fromkeys(list(payload.get("artifacts") or []) + artifacts_from_state))
     payload["artifacts"] = merged_artifacts
 
     try:
@@ -237,9 +233,7 @@ def _parse_deliverable(messages: list, artifacts_from_state: list[str]) -> SubAg
         )
 
 
-def _deliverable_to_markdown(
-    deliverable: SubAgentDeliverable, child_thread_id: str, subagent_type: str
-) -> str:
+def _deliverable_to_markdown(deliverable: SubAgentDeliverable, child_thread_id: str, subagent_type: str) -> str:
     """把结构化 deliverable 渲染为 LLM 友好的 markdown。
 
     不渲染 raw_text：避免 ToolMessage 体积膨胀，符合 Orchestrator-Worker 减少 token 的目标。
@@ -303,9 +297,7 @@ def _with_run_payload(subagent_run: dict[str, Any], run) -> dict[str, Any]:
     return {**subagent_run, **_agent_run_state_payload(run)}
 
 
-def _completed_tool_response(
-    result: dict[str, Any], tool_call_id: str, subagent_run: dict[str, Any]
-) -> Command:
+def _completed_tool_response(result: dict[str, Any], tool_call_id: str, subagent_run: dict[str, Any]) -> Command:
     """子 run 成功终结时构造父侧 ToolMessage 响应。
 
     流程：从 result.messages 解析 ``SubAgentDeliverable`` → 渲染为 markdown
@@ -578,6 +570,7 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         ``available_agents`` 为已格式化的子智能体列表文本，注入到工具 docstring
         供 LLM 选择 ``subagent_type``。同步 ``task`` 仅返回提示（实际逻辑在 ``atask``）。
         """
+
         def task(
             description: Annotated[str, TASK_DESCRIPTION_ARG],
             subagent_type: Annotated[str, SUBAGENT_TYPE_ARG],
@@ -725,18 +718,14 @@ class StarRingSubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
     ) -> ModelResponse[ResponseT]:
-        return handler(
-            request.override(system_message=self._append_system_prompt(request.system_message))
-        )
+        return handler(request.override(system_message=self._append_system_prompt(request.system_message)))
 
     async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
     ) -> ModelResponse[ResponseT]:
-        return await handler(
-            request.override(system_message=self._append_system_prompt(request.system_message))
-        )
+        return await handler(request.override(system_message=self._append_system_prompt(request.system_message)))
 
 
 async def create_subagent_task_middleware(parent_context) -> StarRingSubAgentMiddleware | None:

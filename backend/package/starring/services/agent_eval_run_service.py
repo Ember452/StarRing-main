@@ -1,4 +1,4 @@
-﻿"""Agent evaluation run service.
+"""Agent evaluation run service.
 
 This service intentionally does not implement dataset storage or judging. It
 creates a normal conversation-backed AgentRun, blocks until it finishes, and
@@ -12,7 +12,6 @@ from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from starring.repositories.agent_repository import AgentRepository
 from starring.repositories.conversation_repository import ConversationRepository
 from starring.services.agent_run_service import await_agent_run_result, create_agent_run_view

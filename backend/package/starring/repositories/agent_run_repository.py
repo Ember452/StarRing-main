@@ -1,4 +1,4 @@
-﻿"""Agent run repository."""
+"""Agent run repository."""
 
 from __future__ import annotations
 
@@ -16,10 +16,12 @@ class AgentRunRepository:
     这是一个 Agent 运行记录的数据访问层（Repository / DAO），
     封装了对 agent_runs 表的全部数据库操作。它负责追踪一次 Agent 执行从创建到结束的完整生命周期。
     """
+
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
 
     async def get_run(self, run_id: str) -> AgentRun | None:
+        """获取一个Agent调用的运行记录"""
         result = await self.db.execute(select(AgentRun).where(AgentRun.id == run_id))
         return result.scalar_one_or_none()
 
@@ -28,6 +30,8 @@ class AgentRunRepository:
         return result.scalar_one_or_none()
 
     async def get_resume_run(self, parent_run_id: str, resume_request_id: str) -> AgentRun | None:
+        """幂等设计：防止重复创建恢复，如果已经包含了这个run的所有信息
+        说明不用重复创建，直接返回"""
         result = await self.db.execute(
             select(AgentRun).where(
                 AgentRun.parent_run_id == parent_run_id,
@@ -85,8 +89,8 @@ class AgentRunRepository:
             input_payload=input_payload or {},
             status="pending",
         )
-        self.db.add(run) # 表名这个是新增记录，仅内存操作
-        await self.db.flush() # 把所有pending对象提交到数据库执行insert，但此时事务还没提交，其他数据库连接看不到
+        self.db.add(run)  # 表名这个是新增记录，仅内存操作
+        await self.db.flush()  # 把所有pending对象提交到数据库执行insert，但此时事务还没提交，其他数据库连接看不到
         return run
 
     async def set_input_message(self, run_id: str, message_id: int) -> AgentRun | None:
@@ -153,8 +157,10 @@ class AgentRunRepository:
         return run
 
     async def _lock_run(self, run_id: str) -> AgentRun | None:
-        result = await self.db.execute(select(AgentRun)
-                                       .where(AgentRun.id == run_id)
-                                        # 得不到快速返回
-                                       .with_for_update(skip_locked=True))
+        result = await self.db.execute(
+            select(AgentRun)
+            .where(AgentRun.id == run_id)
+            # 得不到快速返回
+            .with_for_update(skip_locked=True)
+        )
         return result.scalar_one_or_none()

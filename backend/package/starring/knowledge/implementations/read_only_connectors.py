@@ -1,4 +1,4 @@
-﻿from typing import Any
+from typing import Any
 
 from starring.knowledge.base import KnowledgeBase
 

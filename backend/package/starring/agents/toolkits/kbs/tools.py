@@ -1,4 +1,4 @@
-﻿"""知识库工具模块"""
+"""知识库工具模块"""
 
 import inspect
 from typing import Any
@@ -198,6 +198,7 @@ def _find_query_target(
     if target_info is None:
         return None, None, f"知识库资源 '{normalized_kb_id}' 不存在"
     return target_info, normalized_kb_id, None
+
 
 # category：把工具归类，方便按类型选择。tags：给工具打上中文标签。args_schema：指定工具接收的输入结构
 @tool(category="knowledge", tags=["知识库"], args_schema=QueryKBInput)

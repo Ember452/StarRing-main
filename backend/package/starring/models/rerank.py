@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from typing import Any

@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import time
 
 from starring.knowledge.chunking.ragflow_like.presets import resolve_chunk_processing_params

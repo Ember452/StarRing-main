@@ -1,4 +1,4 @@
-﻿from starring.knowledge.base import KBNotFoundError, KnowledgeBase
+from starring.knowledge.base import KBNotFoundError, KnowledgeBase
 from starring.utils import logger
 
 

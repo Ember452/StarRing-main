@@ -1,4 +1,4 @@
-﻿from fastapi import Request
+from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from starring.storage.postgres.models_business import OperationLog
 

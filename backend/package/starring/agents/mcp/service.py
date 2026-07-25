@@ -1,4 +1,4 @@
-﻿"""MCP Service - Unified business logic and state management for MCP.
+"""MCP Service - Unified business logic and state management for MCP.
 
 Responsibilities:
 - Server configuration CRUD operations

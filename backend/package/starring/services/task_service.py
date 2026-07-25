@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable

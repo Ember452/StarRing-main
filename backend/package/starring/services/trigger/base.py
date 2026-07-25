@@ -24,5 +24,5 @@ class BaseTrigger(ABC):
     trigger_type: str
 
     @abstractmethod
-    async def execute(self, trigger: "Trigger", payload: dict | None = None) -> dict:
+    async def execute(self, trigger: Trigger, payload: dict | None = None) -> dict:
         """执行触发器，返回 {"status": "queued", "run_id": ...}。"""

@@ -1,4 +1,4 @@
-﻿"""应用配置模块。"""
+"""应用配置模块。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿from starring.utils.datetime_utils import shanghai_now
+from starring.utils.datetime_utils import shanghai_now
 from starring.utils.paths import (
     VIRTUAL_PATH_OUTPUTS,
     VIRTUAL_PATH_PREFIX,

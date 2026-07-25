@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from starring.repositories.conversation_repository import ConversationRepository
 from starring.repositories.trigger_repository import TriggerRepository
 from starring.services.agent_run_service import create_run
@@ -51,9 +50,7 @@ async def execute_trigger(*, trigger_id: str, scheduled_time_iso: str | None = N
             logger.info(f"Trigger {trigger_id} skipped: not found or inactive")
             return {"status": "skipped", "reason": "trigger inactive or not found"}
 
-        return await _do_execute_trigger(
-            db, trigger, payload={"scheduled_time": scheduled_time_iso}
-        )
+        return await _do_execute_trigger(db, trigger, payload={"scheduled_time": scheduled_time_iso})
 
 
 async def execute_webhook_trigger(
@@ -89,9 +86,7 @@ async def execute_webhook_trigger(
         return await _do_execute_trigger(db, trigger, payload=payload)
 
 
-async def _do_execute_trigger(
-    db: AsyncSession, trigger: "Trigger", payload: dict | None = None
-) -> dict:
+async def _do_execute_trigger(db: AsyncSession, trigger: Trigger, payload: dict | None = None) -> dict:
     """通用执行路径（非阻塞）：创建 conversation → create_run → 标记 running → 立即返回。
 
     不阻塞等待 run 结果——run 终结后由 mark_run_terminal 钩子异步更新 Trigger.last_run_status。
@@ -103,7 +98,9 @@ async def _do_execute_trigger(
         scheduled_time = (payload or {}).get("scheduled_time") or utc_now_naive().isoformat()
         title = f"[{trigger.trigger_type}] {trigger.name} {scheduled_time}"
         conversation = await conv_repo.create_conversation(
-            uid=trigger.uid, agent_id=trigger.agent_id, title=title,
+            uid=trigger.uid,
+            agent_id=trigger.agent_id,
+            title=title,
         )
 
         # 2. 调 create_run（service 层 enqueue ARQ 任务后立即返回）
@@ -135,9 +132,7 @@ async def _do_execute_trigger(
 
     except HTTPException as e:
         # service 层抛 HTTPException，触发器上下文转 logger
-        logger.warning(
-            f"Trigger {trigger.id} failed: status={e.status_code} detail={e.detail}"
-        )
+        logger.warning(f"Trigger {trigger.id} failed: status={e.status_code} detail={e.detail}")
         await TriggerRepository(db).mark_finished(trigger.id, "failed", None)
         return {
             "status": "failed",
@@ -154,7 +149,7 @@ async def _do_execute_trigger(
         }
 
 
-def _default_query(trigger: "Trigger", payload: dict | None) -> str:
+def _default_query(trigger: Trigger, payload: dict | None) -> str:
     """触发器未配置 input_query 时的默认 query。"""
     if trigger.trigger_type == "cron":
         return f"请按定时任务「{trigger.name}」执行"

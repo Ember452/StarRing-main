@@ -141,7 +141,9 @@ class _BackendScope:
         )
 
     @classmethod
-    def from_sources(cls, *sources, readable_skills_source, error_context: str, model: str | None = None) -> _BackendScope:
+    def from_sources(
+        cls, *sources, readable_skills_source, error_context: str, model: str | None = None
+    ) -> _BackendScope:
         def string_value(key: str) -> str | None:
             for source in sources:
                 value = source.get(key) if isinstance(source, dict) else getattr(source, key, None)

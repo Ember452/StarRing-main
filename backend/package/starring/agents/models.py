@@ -1,4 +1,4 @@
-﻿from langchain.chat_models import BaseChatModel
+from langchain.chat_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 

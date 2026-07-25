@@ -1,4 +1,4 @@
-﻿"""认证服务。"""
+"""认证服务。"""
 
 import hashlib
 import secrets
@@ -8,7 +8,6 @@ from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from starring.storage.postgres.models_business import APIKey, CLIAuthSession, Department, User
 from starring.utils.auth_utils import AuthUtils
 from starring.utils.datetime_utils import utc_now_naive

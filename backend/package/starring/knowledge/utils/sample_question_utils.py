@@ -1,4 +1,4 @@
-﻿"""知识库示例问题生成工具。"""
+"""知识库示例问题生成工具。"""
 
 import json
 import textwrap

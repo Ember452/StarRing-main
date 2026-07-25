@@ -254,7 +254,7 @@ async def create_agent_run_view(
     resume_request_id: str | None = None,
 ) -> dict:
     """HTTP view 层：参数已在 router 层完成解析，此函数为 service 层 ``create_run`` 的薄包装。
-
+    TODO：这里保留View层可做扩展
     保留 view 层入口供后续扩展（如审计日志、限流、HTTP 上下文相关逻辑）；
     业务逻辑全部在 service 层 ``create_run`` 中，触发器等非 HTTP 调用方应直接调 ``create_run``。
     """
@@ -321,7 +321,7 @@ async def create_run(
     agent_backend = agent_manager.get_agent(agent_item.backend_id)
     if not agent_backend:
         raise HTTPException(status_code=404, detail=f"智能体后端 {agent_item.backend_id} 不存在")
-
+    # 确定run_type和request_id
     run_type = "resume" if resume is not None else "chat"
     request_id = str(resume_request_id or (meta or {}).get("request_id") or uuid.uuid4())
     config = {"thread_id": thread_id, "agent_id": agent_id}
@@ -350,7 +350,9 @@ async def create_run(
     if existing and existing.uid != str(current_uid):
         raise HTTPException(status_code=409, detail="request_id 冲突")
 
+    # 生成新的RunID
     run_id = str(uuid.uuid4())
+    # 构建input_payload
     input_payload = {
         "query": query or "",
         "resume": resume,
@@ -372,6 +374,7 @@ async def create_run(
         "created_at": utc_now_naive().isoformat(),
     }
     try:
+        # 创建新的Agent Run记录，写入数据库
         run = await run_repo.create_run(
             run_id=run_id,
             thread_id=thread_id,
@@ -386,6 +389,7 @@ async def create_run(
             checkpoint_thread_id=thread_id,
         )
         input_content = query or json.dumps(resume, ensure_ascii=False)
+
         input_metadata = {
             "request_id": request_id,
             "run_id": run_id,
@@ -401,7 +405,7 @@ async def create_run(
             input_metadata["evaluation"] = (meta or {}).get("evaluation")
         if run_type == "resume":
             input_metadata["source"] = "ask_user_question_resume"
-
+        # 创建输入消息
         input_message = Message(
             conversation_id=conversation.id,
             role="user",
@@ -417,6 +421,8 @@ async def create_run(
         await db.flush()
         await run_repo.set_input_message(run_id, input_message.id)
         await db.commit()
+    # 防止两个请求同时检查，都去 commit：唯一约束冲突时回滚，
+    # 若已存在同用户同 request_id 的 run 则直接返回（幂等），否则拒绝
     except IntegrityError:
         await db.rollback()
         existing = await run_repo.get_run_by_request_id(request_id)

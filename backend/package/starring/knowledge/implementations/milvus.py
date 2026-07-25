@@ -1316,6 +1316,7 @@ class MilvusKB(KnowledgeBase):
 
     async def delete_database(self, kb_id: str) -> dict:
         """删除数据库，同时清除Milvus中的集合与Neo4j图谱数据"""
+
         # 同步操作，通过 to_thread 避免阻塞事件循环
         def _drop_milvus_collections():
             try:

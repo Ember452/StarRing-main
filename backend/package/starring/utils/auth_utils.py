@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import os
 import secrets
 from datetime import timedelta
