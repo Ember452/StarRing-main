@@ -15,7 +15,7 @@ export const NODE_META = {
     label: '开始',
     icon: Play,
     color: 'var(--gray-800)',
-    bg: 'var(--gray-50)',
+    bg: 'var(--gray-50)'
   },
   end: {
     nodeType: 'start-end',
@@ -23,36 +23,36 @@ export const NODE_META = {
     label: '结束',
     icon: Flag,
     color: 'var(--gray-800)',
-    bg: 'var(--gray-50)',
+    bg: 'var(--gray-50)'
   },
   llm: {
     nodeType: 'llm',
     label: 'LLM',
     icon: Sparkles,
     color: 'var(--main-color)',
-    bg: 'var(--main-30)',
+    bg: 'var(--main-30)'
   },
   condition: {
     nodeType: 'condition',
     label: '条件分支',
     icon: GitBranch,
     color: 'var(--color-warning-700)',
-    bg: 'var(--color-warning-50)',
+    bg: 'var(--color-warning-50)'
   },
   'application-call': {
     nodeType: 'application-call',
     label: '调用智能体',
     icon: AppWindow,
     color: 'var(--color-info-700)',
-    bg: 'var(--color-info-50)',
+    bg: 'var(--color-info-50)'
   },
   tool: {
     nodeType: 'tool',
     label: '工具',
     icon: Wrench,
     color: 'var(--color-success-700)',
-    bg: 'var(--color-success-50)',
-  },
+    bg: 'var(--color-success-50)'
+  }
 }
 
 /** 根据后端节点 node_type + config 反查面板类型 key */
@@ -91,6 +91,6 @@ export function createFlowNode(metaKey, position) {
     id,
     type: meta.nodeType,
     position: { ...position },
-    data: { name: meta.label, config },
+    data: { name: meta.label, config }
   }
 }

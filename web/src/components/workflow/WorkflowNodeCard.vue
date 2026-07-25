@@ -16,7 +16,12 @@
       <div v-for="(c, i) in cases" :key="i" class="wf-branch-row">
         <span class="wf-branch-label">IF</span>
         <span class="wf-branch-expr">{{ c.when || '（未填写条件）' }}</span>
-        <Handle :id="`case-${i}`" type="source" :position="Position.Right" class="wf-branch-handle" />
+        <Handle
+          :id="`case-${i}`"
+          type="source"
+          :position="Position.Right"
+          class="wf-branch-handle"
+        />
       </div>
       <div class="wf-branch-row is-default">
         <span class="wf-branch-label">ELSE</span>
@@ -45,7 +50,7 @@ const props = defineProps({
   id: { type: String, required: true },
   type: { type: String, required: true },
   data: { type: Object, required: true },
-  selected: { type: Boolean, default: false },
+  selected: { type: Boolean, default: false }
 })
 
 const metaKey = computed(() => metaKeyOf(props.type, props.data.config))

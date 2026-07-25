@@ -93,7 +93,10 @@
           <template v-if="selectedNode.type === 'start-end'">
             <div class="field">
               <div class="field-label">类型</div>
-              <a-input :value="selectedNode.data.config.kind === 'start' ? '开始节点' : '结束节点'" disabled />
+              <a-input
+                :value="selectedNode.data.config.kind === 'start' ? '开始节点' : '结束节点'"
+                disabled
+              />
             </div>
             <div v-if="selectedNode.data.config.kind === 'end'" class="field">
               <div class="field-label">输出模板</div>
@@ -166,17 +169,9 @@
           <template v-else-if="selectedNode.type === 'condition'">
             <div class="field">
               <div class="field-label required">分支条件</div>
-              <div
-                v-for="(c, i) in selectedNode.data.config.cases"
-                :key="i"
-                class="case-row"
-              >
+              <div v-for="(c, i) in selectedNode.data.config.cases" :key="i" class="case-row">
                 <span class="case-index">IF</span>
-                <a-input
-                  v-model:value="c.when"
-                  class="case-expr"
-                  placeholder="条件表达式"
-                />
+                <a-input v-model:value="c.when" class="case-expr" placeholder="条件表达式" />
                 <a-button
                   type="text"
                   size="small"
@@ -191,7 +186,9 @@
                 <template #icon><Plus :size="14" /></template>
                 添加分支
               </a-button>
-              <div class="field-tip">分支目标通过画布连线指定，未命中任何分支时走 ELSE 默认分支</div>
+              <div class="field-tip">
+                分支目标通过画布连线指定，未命中任何分支时走 ELSE 默认分支
+              </div>
             </div>
           </template>
 
@@ -292,9 +289,7 @@ import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
-import {
-  ArrowLeft, Save, Braces, ShieldCheck, X, Plus, Trash2,
-} from 'lucide-vue-next'
+import { ArrowLeft, Save, Braces, ShieldCheck, X, Plus, Trash2 } from 'lucide-vue-next'
 import { workflowApi } from '@/apis/workflow_api'
 import { agentApi } from '@/apis/agent_api'
 import { mcpApi } from '@/apis/mcp_api'
@@ -317,10 +312,11 @@ const nodeTypes = {
   llm: nodeCard,
   condition: nodeCard,
   'application-call': nodeCard,
-  tool: nodeCard,
+  tool: nodeCard
 }
 
-const { screenToFlowCoordinate, getViewport, setViewport, fitView, removeNodes, addEdges } = useVueFlow()
+const { screenToFlowCoordinate, getViewport, setViewport, fitView, removeNodes, addEdges } =
+  useVueFlow()
 
 // ---------------------------------------------------------------------------
 // 数据加载
@@ -340,7 +336,7 @@ async function loadWorkflow() {
       // 空工作流：自动放置 start + end
       flow.nodes = [
         createFlowNode('start', { x: 100, y: 220 }),
-        createFlowNode('end', { x: 560, y: 220 }),
+        createFlowNode('end', { x: 560, y: 220 })
       ]
     }
     nodes.value = flow.nodes
@@ -446,12 +442,15 @@ const toolArgsText = ref('')
 const toolArgsExprExample = '{{ node_outputs["n1"].summary }}'
 
 // selectedNode 定义在下方（选中与配置面板段），这里用 getter 延迟取值避免 TDZ
-watch(() => selectedNode.value, (node) => {
-  if (node?.type === 'tool') {
-    toolArgsText.value = JSON.stringify(node.data.config.args || {}, null, 2)
-    if (node.data.config.tool_source === 'mcp') loadMcpTools(node.data.config.mcp_server)
+watch(
+  () => selectedNode.value,
+  (node) => {
+    if (node?.type === 'tool') {
+      toolArgsText.value = JSON.stringify(node.data.config.args || {}, null, 2)
+      if (node.data.config.tool_source === 'mcp') loadMcpTools(node.data.config.mcp_server)
+    }
   }
-})
+)
 
 function commitToolArgs() {
   const node = selectedNode.value
@@ -522,12 +521,14 @@ function addNodeByClick(metaKey) {
   // 点击添加：放在当前视口中心附近，带随机偏移避免完全重叠
   const center = screenToFlowCoordinate({
     x: window.innerWidth / 2,
-    y: window.innerHeight / 2,
+    y: window.innerHeight / 2
   })
-  nodes.value.push(createFlowNode(metaKey, {
-    x: center.x + Math.random() * 60 - 30,
-    y: center.y + Math.random() * 60 - 30,
-  }))
+  nodes.value.push(
+    createFlowNode(metaKey, {
+      x: center.x + Math.random() * 60 - 30,
+      y: center.y + Math.random() * 60 - 30
+    })
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -568,9 +569,7 @@ function onConnect(connection) {
 // 选中与配置面板
 // ---------------------------------------------------------------------------
 const selectedNodeId = ref(null)
-const selectedNode = computed(() =>
-  nodes.value.find((n) => n.id === selectedNodeId.value) || null
-)
+const selectedNode = computed(() => nodes.value.find((n) => n.id === selectedNodeId.value) || null)
 const selectedMeta = computed(() =>
   selectedNode.value
     ? NODE_META[metaKeyOf(selectedNode.value.type, selectedNode.value.data.config)]
@@ -619,7 +618,7 @@ const saving = ref(false)
 function buildDefinition() {
   return flowToDefinition(nodes.value, edges.value, {
     version: wfMeta.version,
-    viewport: getViewport(),
+    viewport: getViewport()
   })
 }
 
@@ -655,7 +654,7 @@ async function save() {
     }
     const wf = await workflowApi.update(workflowId, {
       name: wfMeta.name,
-      definition,
+      definition
     })
     wfMeta.version = wf.definition?.version || wfMeta.version
     message.success('保存成功')

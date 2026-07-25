@@ -69,5 +69,5 @@ export const workflowApi = {
    * 获取编辑器的工具/MCP 选项（普通用户可用，供 tool 节点与 llm 节点挂工具）
    * @returns {Promise<{tools: Array<{key, name, description}>, mcps: Array<{key, name, description}>}>}
    */
-  resourceOptions: () => apiGet('/api/workflows/resource-options'),
+  resourceOptions: () => apiGet('/api/workflows/resource-options')
 }
