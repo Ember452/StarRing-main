@@ -10,6 +10,7 @@ from starring.agents.mcp.service import (
     delete_mcp_server,
     get_all_mcp_servers,
     get_all_mcp_tools,
+    get_enabled_mcp_tools,
     get_mcp_server,
     set_server_enabled,
     toggle_tool_enabled,
@@ -298,6 +299,33 @@ async def update_mcp_server_status_route(
 # =============================================================================
 # === MCP 工具管理 ===
 # =============================================================================
+
+
+@mcp.get("/{slug}/tools/enabled")
+async def get_mcp_server_enabled_tools(
+    slug: str,
+    current_user: User = Depends(get_required_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取 MCP 服务器已启用的工具列表（普通用户可用，供工作流编辑器 tool 节点选择工具）。
+
+    与管理接口 GET /{slug}/tools 的区别：仅返回启用工具的 name/description，
+    不暴露参数 schema 与禁用状态，与运行时 get_enabled_mcp_tools 的可见范围一致。
+    """
+    try:
+        await get_server_or_404(db, slug)
+        tools = await get_enabled_mcp_tools(slug)
+        return {
+            "success": True,
+            "data": [
+                {"name": tool.name, "description": getattr(tool, "description", "")} for tool in tools
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get enabled MCP server tools: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @mcp.get("/{slug}/tools")

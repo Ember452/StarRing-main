@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   MessageCirclePlus,
   AlarmClock,
+  Workflow,
   Database
 } from 'lucide-vue-next'
 
@@ -171,6 +172,14 @@ const mainList = computed(() => {
     activePaths: ['/triggers'],
     icon: AlarmClock,
     activeIcon: AlarmClock
+  })
+
+  items.push({
+    name: '工作流',
+    path: '/workflows',
+    activePaths: ['/workflows'],
+    icon: Workflow,
+    activeIcon: Workflow
   })
 
   if (userStore.isAdmin) {

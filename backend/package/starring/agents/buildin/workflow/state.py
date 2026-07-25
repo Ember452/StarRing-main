@@ -6,9 +6,10 @@ WorkflowState 扩展自 BaseState，新增：
 
 设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §四
 """
+
 from __future__ import annotations
 
-from typing import Annotated, TypedDict
+from typing import Annotated
 
 from langchain.agents import AgentState
 

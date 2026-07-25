@@ -93,6 +93,15 @@ export const getMcpServerTools = async (name) => {
 }
 
 /**
+ * 获取 MCP 服务器已启用的工具列表（普通用户可用，供工作流编辑器选择工具）
+ * @param {string} slug - 服务器 slug
+ * @returns {Promise} - 启用工具列表（仅 name/description）
+ */
+export const getMcpServerEnabledTools = async (slug) => {
+  return apiGet(`${BASE_URL}/${encodeURIComponent(slug)}/tools/enabled`)
+}
+
+/**
  * 刷新 MCP 服务器的工具列表（清除缓存重新获取）
  * @param {string} name - 服务器名称
  * @returns {Promise} - 刷新结果
@@ -123,6 +132,7 @@ export const mcpApi = {
   testMcpServer,
   updateMcpServerStatus,
   getMcpServerTools,
+  getMcpServerEnabledTools,
   refreshMcpServerTools,
   toggleMcpServerTool
 }

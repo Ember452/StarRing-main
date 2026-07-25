@@ -168,6 +168,25 @@ const router = createRouter({
       ]
     },
     {
+      path: '/workflows',
+      name: 'workflows',
+      component: AppLayout,
+      children: [
+        {
+          path: '',
+          name: 'WorkflowListComp',
+          component: () => import('../views/WorkflowListView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        },
+        {
+          path: ':workflowId',
+          name: 'WorkflowEditorComp',
+          component: () => import('../views/WorkflowEditorView.vue'),
+          meta: { keepAlive: false, requiresAuth: true }
+        }
+      ]
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'NotFound',
       component: () => import('../views/EmptyView.vue'),

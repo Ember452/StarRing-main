@@ -5,9 +5,10 @@
 
 设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §五、§八.3
 """
+
 from __future__ import annotations
 
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from starring.agents.buildin.workflow.context import WorkflowContext
 from starring.agents.buildin.workflow.definition import Node
@@ -38,7 +39,5 @@ def register_node(node_type: str) -> Callable[[NodeExecutor], NodeExecutor]:
 def get_node_executor(node_type: str) -> NodeExecutor:
     """按节点类型获取执行器，未注册时抛 ValueError。"""
     if node_type not in NODE_REGISTRY:
-        raise ValueError(
-            f"未知节点类型 {node_type}，已注册类型：{list(NODE_REGISTRY.keys())}"
-        )
+        raise ValueError(f"未知节点类型 {node_type}，已注册类型：{list(NODE_REGISTRY.keys())}")
     return NODE_REGISTRY[node_type]

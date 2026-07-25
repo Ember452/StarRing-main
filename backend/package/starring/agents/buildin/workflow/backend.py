@@ -5,6 +5,7 @@ WorkflowBackend 继承 BaseAgent，把持久化的工作流定义（nodes + edge
 
 设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §八
 """
+
 from __future__ import annotations
 
 from functools import partial
@@ -16,12 +17,21 @@ from langgraph.graph.state import CompiledStateGraph
 from starring.agents import BaseAgent
 from starring.agents.buildin.workflow.context import WorkflowContext
 from starring.agents.buildin.workflow.definition import WorkflowDefinition
-from starring.agents.buildin.workflow.nodes import get_node_executor
 from starring.agents.buildin.workflow.nodes import (
     application_call as _application_call_module,  # noqa: F401 触发 @register_node
+)
+from starring.agents.buildin.workflow.nodes import (
     condition as _condition_module,  # noqa: F401 触发 @register_node
+)
+from starring.agents.buildin.workflow.nodes import get_node_executor
+from starring.agents.buildin.workflow.nodes import (
     llm as _llm_module,  # noqa: F401 触发 @register_node
+)
+from starring.agents.buildin.workflow.nodes import (
     start_end as _start_end_module,  # noqa: F401 触发 @register_node
+)
+from starring.agents.buildin.workflow.nodes import (
+    tool_call as _tool_call_module,  # noqa: F401 触发 @register_node
 )
 from starring.agents.buildin.workflow.state import WorkflowState
 from starring.utils import logger
@@ -38,8 +48,7 @@ class WorkflowBackend(BaseAgent):
 
     name = "工作流引擎"
     description = (
-        "确定性流程编排 backend，基于 LangGraph StateGraph。"
-        "适用于合规审查、标准化报告、流水线数据处理等流程化任务。"
+        "确定性流程编排 backend，基于 LangGraph StateGraph。适用于合规审查、标准化报告、流水线数据处理等流程化任务。"
     )
     capabilities = ["file_upload", "files"]
     context_schema = WorkflowContext
@@ -95,9 +104,7 @@ class WorkflowBackend(BaseAgent):
                 # fallback：按 UUID 查（用户显式配置 workflows.id 的场景）
                 workflow = await repo.get(context.workflow_id)
             if workflow is None:
-                raise ValueError(
-                    f"工作流 {context.workflow_id!r} 不存在（已按 slug 与 id 两次查询）"
-                )
+                raise ValueError(f"工作流 {context.workflow_id!r} 不存在（已按 slug 与 id 两次查询）")
             if not workflow.is_active:
                 raise ValueError(f"工作流 {context.workflow_id} 已停用")
 
@@ -105,9 +112,7 @@ class WorkflowBackend(BaseAgent):
             context.workflow_version = workflow.version
             return definition
 
-    def _build_state_graph(
-        self, definition: WorkflowDefinition, context: WorkflowContext
-    ) -> CompiledStateGraph:
+    def _build_state_graph(self, definition: WorkflowDefinition, context: WorkflowContext) -> CompiledStateGraph:
         """把工作流定义编译为 LangGraph StateGraph。
 
         步骤：

@@ -11,6 +11,7 @@
 
 设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §六
 """
+
 from __future__ import annotations
 
 import ast
@@ -189,9 +190,6 @@ def _eval_node(node: ast.AST, context: dict[str, Any]) -> Any:
         return [_eval_node(elt, context) for elt in node.elts]
 
     if isinstance(node, ast.Dict):
-        return {
-            _eval_node(k, context): _eval_node(v, context)
-            for k, v in zip(node.keys, node.values)
-        }
+        return {_eval_node(k, context): _eval_node(v, context) for k, v in zip(node.keys, node.values)}
 
     raise ValueError(f"未处理的 AST 节点: {type(node).__name__}")

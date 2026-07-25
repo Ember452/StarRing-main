@@ -4,6 +4,7 @@
 
 设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §三
 """
+
 from __future__ import annotations
 
 from sqlalchemy import and_, select

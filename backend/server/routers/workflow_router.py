@@ -145,6 +145,23 @@ async def validate_definition(
     return _build_validation_response(payload)
 
 
+@workflow_router.get("/resource-options", response_model=dict)
+async def get_workflow_resource_options(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_required_user),
+):
+    """获取工作流编辑器的工具/MCP 选项（普通用户可用）。
+
+    工具/MCP 管理接口为 admin-only，tool 节点与 llm 节点挂工具面向普通用户，
+    这里复用智能体配置页同源的 resolve_agent_resource_options（buildin 工具 +
+    已启用 MCP 服务器，option 字段：key/name/description）。
+    """
+    from starring.agents.context import resolve_agent_resource_options
+
+    options = await resolve_agent_resource_options({"tools", "mcps"}, db=db, user=user)
+    return {"tools": options.get("tools", []), "mcps": options.get("mcps", [])}
+
+
 @workflow_router.get("/{workflow_id}", response_model=dict)
 async def get_workflow(
     workflow_id: str,

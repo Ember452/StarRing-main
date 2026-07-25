@@ -5,6 +5,7 @@ end 节点：合成所有节点输出为最终响应，写入 messages
 
 设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §五.2
 """
+
 from __future__ import annotations
 
 from langchain_core.messages import AIMessage
@@ -17,9 +18,7 @@ from starring.agents.middlewares.subagent_deliverable import SubAgentDeliverable
 
 
 @register_node("start-end")
-async def execute_start_end(
-    state: WorkflowState, node: Node, context: WorkflowContext
-) -> dict:
+async def execute_start_end(state: WorkflowState, node: Node, context: WorkflowContext) -> dict:
     """start / end 节点执行器。
 
     config.kind == "start": 从 state.messages 取用户最后一条输入，写入 node_outputs

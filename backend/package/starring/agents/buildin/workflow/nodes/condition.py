@@ -5,6 +5,7 @@
 
 设计依据：docs/vibe/P1-B-工作流引擎细化设计-20260719.md §五.2、§六
 """
+
 from __future__ import annotations
 
 from langgraph.types import Command
@@ -18,9 +19,7 @@ from starring.agents.middlewares.subagent_deliverable import SubAgentDeliverable
 
 
 @register_node("condition")
-async def execute_condition(
-    state: WorkflowState, node: Node, context: WorkflowContext
-) -> Command:
+async def execute_condition(state: WorkflowState, node: Node, context: WorkflowContext) -> Command:
     """条件分支节点执行器。
 
     config 字段:
@@ -64,9 +63,7 @@ async def execute_condition(
     # 所有 case 不命中时走 default
     if matched_branch is None:
         if not default_branch:
-            raise ValueError(
-                f"condition 节点 {node.id} 所有 case 未命中且未配置 default 分支"
-            )
+            raise ValueError(f"condition 节点 {node.id} 所有 case 未命中且未配置 default 分支")
         matched_branch = default_branch
         match_reason = "所有 case 未命中，走 default 分支"
 
