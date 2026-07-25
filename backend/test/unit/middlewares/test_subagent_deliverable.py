@@ -6,6 +6,7 @@
 - confidence / schema_version 边界值
 - EMPTY_DELIVERABLE 常量
 - _parse_deliverable：fenced block 解析、三层兜底、artifacts 合并、raw_text 截断
+- _extract_deliverable：structured_response 原生优先路径 + 正则解析降级路径
 - _deliverable_to_markdown：渲染 markdown，不渲染 raw_text
 """
 
@@ -22,6 +23,7 @@ from starring.agents.middlewares.subagent_deliverable import (
 )
 from starring.agents.middlewares.subagent_task import (
     _deliverable_to_markdown,
+    _extract_deliverable,
     _parse_deliverable,
 )
 
@@ -177,7 +179,7 @@ class TestParseDeliverable:
     """测试 _parse_deliverable(messages, artifacts_from_state)。
 
     H2 修订：第一个参数是 messages 列表（扫描所有 AIMessage.text），
-    不是单个字符串。测试时需用 [AIMessage(text=...)] 包装。
+    不是单个字符串。测试时需用 [AIMessage(content=...)] 包装。
     """
 
     def test_parse_valid_fenced_block(self):
@@ -193,7 +195,7 @@ class TestParseDeliverable:
 ```
 
 后缀说明'''
-        messages = [AIMessage(text=text)]
+        messages = [AIMessage(content=text)]
         d = _parse_deliverable(messages, artifacts_from_state=[])
         assert d.summary == "测试摘要"
         assert d.key_findings == ["发现1", "发现2"]
@@ -215,7 +217,7 @@ class TestParseDeliverable:
 ```'''
         text_explanation = "我已完成结构化输出，请查收。"
         # 倒序排列：最近的解释 AIMessage 在最后
-        messages = [AIMessage(text=text_with_fenced), AIMessage(text=text_explanation)]
+        messages = [AIMessage(content=text_with_fenced), AIMessage(content=text_explanation)]
         d = _parse_deliverable(messages, artifacts_from_state=[])
         assert d.summary == "测试摘要"
         assert d.confidence == 0.9
@@ -223,7 +225,7 @@ class TestParseDeliverable:
     def test_parse_no_fenced_block_fallback(self):
         """没有 fenced block 时兜底到 raw_text。"""
         text = "这是子智能体的自然语言回复，没有结构化输出。"
-        messages = [AIMessage(text=text)]
+        messages = [AIMessage(content=text)]
         d = _parse_deliverable(messages, artifacts_from_state=[])
         # summary validator 从 raw_text 取首段
         assert d.summary.startswith("这是子智能体")
@@ -237,7 +239,7 @@ class TestParseDeliverable:
 {invalid json here
 ```
 """
-        messages = [AIMessage(text=text)]
+        messages = [AIMessage(content=text)]
         d = _parse_deliverable(messages, artifacts_from_state=[])
         assert d.raw_text == text
         assert d.summary  # 不为空，从 raw_text 取首段
@@ -250,7 +252,7 @@ class TestParseDeliverable:
   "confidence": 2.0
 }
 ```"""
-        messages = [AIMessage(text=text)]
+        messages = [AIMessage(content=text)]
         d = _parse_deliverable(messages, artifacts_from_state=[])
         # 兜底：raw_text 保留原文，summary 从原文取首段
         assert d.raw_text == text
@@ -264,7 +266,7 @@ class TestParseDeliverable:
   "artifacts": ["/path/a", "/path/b"]
 }
 ```"""
-        messages = [AIMessage(text=text)]
+        messages = [AIMessage(content=text)]
         d = _parse_deliverable(messages, artifacts_from_state=["/path/b", "/path/c"])
         # fenced block 中的优先，state 补充，去重保序
         assert d.artifacts == ["/path/a", "/path/b", "/path/c"]
@@ -288,7 +290,7 @@ class TestParseDeliverable:
     def test_parse_raw_text_truncated_when_too_long(self):
         """N4 修订：兜底路径 raw_text 超长时截断到 5KB。"""
         long_text = "x" * 6000  # 6KB，超过 5KB 阈值
-        messages = [AIMessage(text=long_text)]
+        messages = [AIMessage(content=long_text)]
         d = _parse_deliverable(messages, artifacts_from_state=[])
         assert len(d.raw_text) < 6000  # 已截断
         assert d.raw_text.endswith("...[truncated]")
@@ -360,3 +362,85 @@ class TestDeliverableToMarkdown:
         d = SubAgentDeliverable(summary="x", confidence=0.123)
         md = _deliverable_to_markdown(d, "t", "s")
         assert "置信度: 0.12" in md
+
+
+class TestExtractDeliverable:
+    """测试 _extract_deliverable(result)：structured_response 原生优先，正则解析降级。"""
+
+    def test_structured_response_instance_preferred(self):
+        """structured_response 为 SubAgentDeliverable 实例时直接采用，忽略消息正则解析。"""
+        structured = SubAgentDeliverable(summary="原生摘要", key_findings=["发现A"], confidence=0.9)
+        result = {
+            "messages": [AIMessage(content="自然语言回复，不应被解析。")],
+            "structured_response": structured,
+        }
+        d = _extract_deliverable(result)
+        assert d.summary == "原生摘要"
+        assert d.key_findings == ["发现A"]
+        assert d.confidence == 0.9
+
+    def test_structured_response_dict_validated(self):
+        """structured_response 为 dict 时通过 model_validate 转为实例。"""
+        result = {
+            "messages": [],
+            "structured_response": {"summary": "dict 摘要", "confidence": 0.7},
+        }
+        d = _extract_deliverable(result)
+        assert d.summary == "dict 摘要"
+        assert d.confidence == 0.7
+
+    def test_structured_response_raw_text_filled_from_final_aimessage(self):
+        """原生路径下 LLM 未填 raw_text 时，取最终 AIMessage 文本回填。"""
+        structured = SubAgentDeliverable(summary="摘要")
+        result = {
+            "messages": [AIMessage(content="第一段"), AIMessage(content="最终回复文本")],
+            "structured_response": structured,
+        }
+        d = _extract_deliverable(result)
+        assert d.raw_text == "最终回复文本"
+
+    def test_structured_response_raw_text_kept_when_llm_provided(self):
+        """LLM 已声明 raw_text 时不覆盖。"""
+        structured = SubAgentDeliverable(summary="摘要", raw_text="LLM 自己写的原文")
+        result = {
+            "messages": [AIMessage(content="最终回复")],
+            "structured_response": structured,
+        }
+        d = _extract_deliverable(result)
+        assert d.raw_text == "LLM 自己写的原文"
+
+    def test_structured_response_artifacts_merged_with_state(self):
+        """原生路径下 artifacts 与 state.artifacts 合并去重保序。"""
+        structured = SubAgentDeliverable(summary="x", artifacts=["/path/a", "/path/b"])
+        result = {
+            "messages": [],
+            "structured_response": structured,
+            "artifacts": ["/path/b", "/path/c"],
+        }
+        d = _extract_deliverable(result)
+        assert d.artifacts == ["/path/a", "/path/b", "/path/c"]
+
+    def test_missing_structured_response_falls_back_to_parse(self):
+        """无 structured_response 时回退到 fenced block 正则解析路径。"""
+        text = '```subagent-result\n{"summary": "正则摘要", "confidence": 0.8}\n```'
+        result = {"messages": [AIMessage(content=text)]}
+        d = _extract_deliverable(result)
+        assert d.summary == "正则摘要"
+        assert d.confidence == 0.8
+
+    def test_invalid_structured_response_falls_back_to_parse(self):
+        """structured_response 校验失败（如 confidence 越界）时回退正则解析路径。"""
+        result = {
+            "messages": [AIMessage(content="自然语言回复。")],
+            "structured_response": {"summary": "x", "confidence": 2.0},
+        }
+        d = _extract_deliverable(result)
+        # 降级后无 fenced block → raw_text 兜底
+        assert d.raw_text == "自然语言回复。"
+        assert d.summary.startswith("自然语言")
+
+    def test_empty_result_returns_empty_deliverable(self):
+        """完全空 result 时走降级路径返回 EMPTY_DELIVERABLE。"""
+        d = _extract_deliverable({})
+        assert d.summary == EMPTY_DELIVERABLE.summary
+
