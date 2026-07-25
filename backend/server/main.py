@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import os
 import sys
 
@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from server.routers import router
+from server.routers.openai_compat_router import openai_compat_router
 from server.utils.lifespan import lifespan
 from server.utils.common_utils import setup_logging
 from server.utils.access_log_middleware import AccessLogMiddleware
@@ -28,7 +29,7 @@ from server.utils.access_log_middleware import AccessLogMiddleware
 # 设置日志配置
 setup_logging()
 
-RATE_LIMIT_MAX_ATTEMPTS = 10 # 限流配置，每60秒最多接收10个请求
+RATE_LIMIT_MAX_ATTEMPTS = 10  # 限流配置，每60秒最多接收10个请求
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_ENDPOINTS = {("/api/auth/token", "POST")}
 DEFAULT_DEVELOPMENT_CORS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
@@ -37,7 +38,7 @@ EXPLICIT_CORS_HEADERS = ("Accept", "Authorization", "Content-Type", "Last-Event-
 
 # In-memory login attempt tracker to reduce brute-force exposure per worker
 _login_attempts: defaultdict[str, deque[float]] = defaultdict(deque)
-_attempt_lock = asyncio.Lock() # 使用异步锁确保多并发请求时的线程安全
+_attempt_lock = asyncio.Lock()  # 使用异步锁确保多并发请求时的线程安全
 
 
 def _parse_cors_origins() -> list[str]:
@@ -75,6 +76,8 @@ def _build_cors_options(origins: list[str] | None = None) -> dict[str, object]:
 app = FastAPI(lifespan=lifespan)
 # 所有业务接口统一挂载到 /api，具体分组在 server.routers 中集中注册。
 app.include_router(router, prefix="/api")
+# OpenAI 兼容出口单独挂载到 /v1（对齐 OpenAI 路径约定，不进 /api 前缀）。
+app.include_router(openai_compat_router, prefix="/v1")
 
 # CORS 设置
 app.add_middleware(
@@ -97,6 +100,7 @@ class LoginRateLimitMiddleware(BaseHTTPMiddleware):
     将每次尝试登录的消息popleft，
     接收请求，查看是否是需要限流的接口，判断是否超过阈值
     """
+
     async def dispatch(self, request: Request, call_next):
         normalized_path = request.url.path.rstrip("/") or "/"
         request_signature = (normalized_path, request.method.upper())
