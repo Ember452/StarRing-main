@@ -263,6 +263,39 @@
             </div>
           </template>
 
+          <!-- kb-retrieval -->
+          <template v-else-if="selectedNode.type === 'kb-retrieval'">
+            <div class="field">
+              <div class="field-label required">检索内容</div>
+              <a-textarea
+                v-model:value="selectedNode.data.config.query"
+                :rows="3"
+                placeholder="检索文本，支持内嵌表达式引用上游输出"
+              />
+              <div class="field-tip">支持 {{ toolArgsExprExample }} 这类内嵌表达式引用上游输出</div>
+            </div>
+            <div class="field">
+              <div class="field-label">知识库</div>
+              <a-select
+                v-model:value="selectedNode.data.config.kb_ids"
+                :options="kbSelectOptions"
+                mode="multiple"
+                placeholder="可选，留空检索全部可见知识库"
+                style="width: 100%"
+              />
+            </div>
+            <div class="field">
+              <div class="field-label">每库返回条数</div>
+              <a-input-number
+                v-model:value="selectedNode.data.config.top_k"
+                :min="1"
+                :max="50"
+                placeholder="默认 5"
+                style="width: 100%"
+              />
+            </div>
+          </template>
+
           <a-button danger block class="delete-node-btn" @click="removeSelectedNode">
             删除节点
           </a-button>
@@ -312,7 +345,8 @@ const nodeTypes = {
   llm: nodeCard,
   condition: nodeCard,
   'application-call': nodeCard,
-  tool: nodeCard
+  tool: nodeCard,
+  'kb-retrieval': nodeCard
 }
 
 const { screenToFlowCoordinate, getViewport, setViewport, fitView, removeNodes, addEdges } =
@@ -372,20 +406,23 @@ async function loadAgents() {
 }
 
 // ---------------------------------------------------------------------------
-// 工具 / MCP 选项（tool 节点 + llm 节点挂工具共用）
+// 工具 / MCP / 知识库选项（tool 节点 + llm 节点挂工具 + kb-retrieval 节点共用）
 // ---------------------------------------------------------------------------
 const toolSelectOptions = ref([])
 const mcpSelectOptions = ref([])
+const kbSelectOptions = ref([])
 
 async function loadResourceOptions() {
   try {
     const data = await workflowApi.resourceOptions()
     toolSelectOptions.value = (data.tools || []).map((t) => ({ value: t.key, label: t.name }))
     mcpSelectOptions.value = (data.mcps || []).map((s) => ({ value: s.key, label: s.name }))
+    kbSelectOptions.value = (data.knowledges || []).map((k) => ({ value: k.key, label: k.name }))
   } catch {
     // 选项加载失败不阻塞编辑器，下拉为空时用户可手动排查
     toolSelectOptions.value = []
     mcpSelectOptions.value = []
+    kbSelectOptions.value = []
   }
 }
 
@@ -440,17 +477,6 @@ function onMcpServerChange(serverSlug) {
 const toolArgsText = ref('')
 // 提示文案里的 {{ }} 示例不能直接写在模板插值中（}} 会提前终止插值），放常量
 const toolArgsExprExample = '{{ node_outputs["n1"].summary }}'
-
-// selectedNode 定义在下方（选中与配置面板段），这里用 getter 延迟取值避免 TDZ
-watch(
-  () => selectedNode.value,
-  (node) => {
-    if (node?.type === 'tool') {
-      toolArgsText.value = JSON.stringify(node.data.config.args || {}, null, 2)
-      if (node.data.config.tool_source === 'mcp') loadMcpTools(node.data.config.mcp_server)
-    }
-  }
-)
 
 function commitToolArgs() {
   const node = selectedNode.value
@@ -574,6 +600,18 @@ const selectedMeta = computed(() =>
   selectedNode.value
     ? NODE_META[metaKeyOf(selectedNode.value.type, selectedNode.value.data.config)]
     : null
+)
+
+// 选中 tool 节点时同步 args 文本态并预加载 MCP 工具列表
+// （watch 的 getter 在注册时即同步执行，必须放在 selectedNode 定义之后）
+watch(
+  () => selectedNode.value,
+  (node) => {
+    if (node?.type === 'tool') {
+      toolArgsText.value = JSON.stringify(node.data.config.args || {}, null, 2)
+      if (node.data.config.tool_source === 'mcp') loadMcpTools(node.data.config.mcp_server)
+    }
+  }
 )
 
 function onNodeClick({ node }) {

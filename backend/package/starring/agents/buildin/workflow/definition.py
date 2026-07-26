@@ -17,7 +17,9 @@ class Node(BaseModel):
     """工作流节点定义。"""
 
     id: str = Field(description="节点唯一 ID（在工作流内唯一）")
-    node_type: Literal["start-end", "llm", "condition", "application-call", "tool"] = Field(description="节点类型")
+    node_type: Literal["start-end", "llm", "condition", "application-call", "tool", "kb-retrieval"] = Field(
+        description="节点类型"
+    )
     name: str = Field(default="", description="节点展示名")
     config: dict[str, Any] = Field(default_factory=dict, description="节点类型特定配置")
 
@@ -61,6 +63,19 @@ class Node(BaseModel):
             args = self.config.get("args")
             if args is not None and not isinstance(args, dict):
                 raise ValueError(f"tool 节点 {self.id} 的 config.args 必须是 dict")
+        elif self.node_type == "kb-retrieval":
+            query = self.config.get("query")
+            if not query or not isinstance(query, str):
+                raise ValueError(f"kb-retrieval 节点 {self.id} 缺少 config.query（非空字符串，支持 {{{{ expr }}}}）")
+            kb_ids = self.config.get("kb_ids")
+            if kb_ids is not None and (
+                not isinstance(kb_ids, list) or not all(isinstance(item, str) for item in kb_ids)
+            ):
+                raise ValueError(f"kb-retrieval 节点 {self.id} 的 config.kb_ids 必须是字符串列表")
+            top_k = self.config.get("top_k")
+            if top_k is not None and (not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= 50):
+                raise ValueError(f"kb-retrieval 节点 {self.id} 的 config.top_k 必须是 1-50 的整数")
+
         return self
 
 

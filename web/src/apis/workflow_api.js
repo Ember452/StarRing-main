@@ -66,8 +66,8 @@ export const workflowApi = {
   validateDefinition: (definition) => apiPost('/api/workflows/validate', definition),
 
   /**
-   * 获取编辑器的工具/MCP 选项（普通用户可用，供 tool 节点与 llm 节点挂工具）
-   * @returns {Promise<{tools: Array<{key, name, description}>, mcps: Array<{key, name, description}>}>}
+   * 获取编辑器的工具/MCP/知识库选项（普通用户可用，供 tool / llm 挂工具 / kb-retrieval 节点）
+   * @returns {Promise<{tools: Array<{key, name, description}>, mcps: Array<{key, name, description}>, knowledges: Array<{key, name, description}>}>}
    */
   resourceOptions: () => apiGet('/api/workflows/resource-options')
 }

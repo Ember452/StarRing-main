@@ -2,10 +2,10 @@
  * 工作流节点类型元数据
  * 与后端 backend/package/StarRing/agents/buildin/workflow/definition.py 的节点契约对齐
  */
-import { Play, Flag, Sparkles, GitBranch, AppWindow, Wrench } from 'lucide-vue-next'
+import { Play, Flag, Sparkles, GitBranch, AppWindow, Wrench, Database } from 'lucide-vue-next'
 
 /**
- * 节点类型展示配置（色系遵循 design.md：start/end=灰、llm=主色、condition=警告、application-call=信息、tool=成功）
+ * 节点类型展示配置（色系遵循 design.md：start/end=灰、llm=主色、condition=警告、application-call/kb-retrieval=信息、tool=成功）
  * key 为「面板类型」：start / end 分开展示，序列化时均映射为后端 node_type='start-end'
  */
 export const NODE_META = {
@@ -52,6 +52,13 @@ export const NODE_META = {
     icon: Wrench,
     color: 'var(--color-success-700)',
     bg: 'var(--color-success-50)'
+  },
+  'kb-retrieval': {
+    nodeType: 'kb-retrieval',
+    label: '知识检索',
+    icon: Database,
+    color: 'var(--color-info-700)',
+    bg: 'var(--color-info-50)'
   }
 }
 
@@ -86,6 +93,10 @@ export function createFlowNode(metaKey, position) {
     config.tool_name = ''
     config.mcp_server = ''
     config.args = {}
+  } else if (metaKey === 'kb-retrieval') {
+    config.query = ''
+    config.kb_ids = []
+    config.top_k = 5
   }
   return {
     id,

@@ -25,6 +25,9 @@ from starring.agents.buildin.workflow.nodes import (
 )
 from starring.agents.buildin.workflow.nodes import get_node_executor
 from starring.agents.buildin.workflow.nodes import (
+    kb_retrieval as _kb_retrieval_module,  # noqa: F401 触发 @register_node
+)
+from starring.agents.buildin.workflow.nodes import (
     llm as _llm_module,  # noqa: F401 触发 @register_node
 )
 from starring.agents.buildin.workflow.nodes import (

@@ -20,6 +20,7 @@ from starring.agents.buildin import agent_manager
 from starring.agents.buildin.workflow.context import WorkflowContext
 from starring.agents.buildin.workflow.definition import Node
 from starring.agents.buildin.workflow.nodes import register_node
+from starring.agents.buildin.workflow.nodes.expr import render_template
 from starring.agents.buildin.workflow.nodes.llm import _build_node_input
 from starring.agents.buildin.workflow.state import WorkflowState
 from starring.agents.middlewares.subagent_task import (
@@ -33,16 +34,19 @@ async def execute_application_call(state: WorkflowState, node: Node, context: Wo
 
     config 字段:
         target_agent_slug: 目标智能体的 slug（必填，agents.slug）
-        input_template: 输入模板（可选，Phase 1 简化为前置文本）
+        input_template: 输入模板（可选，支持 {{ expr }} 内嵌插值）
     """
     config = node.config
     target_slug = config["target_agent_slug"]
 
-    # 构造输入：拼接上游 summary + 模板
+    # 构造输入：拼接上游 summary + 模板（模板支持 {{ expr }} 内嵌插值，求值失败 fail-fast）
     user_input = _build_node_input(state, node.id)
     input_template = config.get("input_template")
     if input_template:
-        user_input = f"{input_template}\n\n{user_input}"
+        rendered = render_template(
+            input_template, state, where=f"application-call 节点 {node.id} 的 input_template"
+        )
+        user_input = f"{rendered}\n\n{user_input}"
 
     # 按 agents.slug 查库解析目标智能体（延迟导入避免循环依赖），
     # 权限主体为工作流 owner（context.uid）：只能调用其可见的智能体。

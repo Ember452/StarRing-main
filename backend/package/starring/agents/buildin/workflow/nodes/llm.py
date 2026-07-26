@@ -20,6 +20,7 @@ from starring.agents import load_chat_model, resolve_chat_model_spec
 from starring.agents.buildin.workflow.context import WorkflowContext
 from starring.agents.buildin.workflow.definition import Node
 from starring.agents.buildin.workflow.nodes import register_node
+from starring.agents.buildin.workflow.nodes.expr import render_template
 from starring.agents.buildin.workflow.state import WorkflowState
 from starring.agents.middlewares.subagent_task import (
     _parse_deliverable,
@@ -49,7 +50,7 @@ async def execute_llm(state: WorkflowState, node: Node, context: WorkflowContext
     config 字段:
         model: 模型规格（如 "openai:gpt-4"），空则用 context.model
         system_prompt: 系统提示词（必填）
-        input_template: 输入模板（可选，含 ${node_outputs['xxx'].summary} 占位符，未实现 Phase 1）
+        input_template: 输入模板（可选，支持 {{ node_outputs['xxx'].summary }} 内嵌插值）
         tools: 内置工具名列表（可选，P2 新增）
         mcps: MCP 服务器 slug 列表（可选，P2 新增）
         max_tool_steps: ReAct 循环最大步数（可选，默认 10，上限 25）
@@ -66,8 +67,9 @@ async def execute_llm(state: WorkflowState, node: Node, context: WorkflowContext
     user_input = _build_node_input(state, node.id)
     input_template = config.get("input_template")
     if input_template:
-        # Phase 1 简化：模板直接拼接在用户输入前（不做 ${...} 替换）
-        user_input = f"{input_template}\n\n{user_input}"
+        # 模板支持 {{ expr }} 内嵌插值（求值失败 fail-fast），渲染后拼接在用户输入前
+        rendered = render_template(input_template, state, where=f"llm 节点 {node.id} 的 input_template")
+        user_input = f"{rendered}\n\n{user_input}"
 
     model = load_chat_model(fully_specified_name=resolve_chat_model_spec(model_spec))
     tools_cfg = config.get("tools") or []

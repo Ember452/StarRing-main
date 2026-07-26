@@ -10,18 +10,14 @@ value 支持 {{ expr }} 形式从上游节点输出映射（复用 safe_eval）�
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from starring.agents.buildin.workflow.context import WorkflowContext
 from starring.agents.buildin.workflow.definition import Node
 from starring.agents.buildin.workflow.nodes import register_node
-from starring.agents.buildin.workflow.nodes.safe_eval import safe_eval
+from starring.agents.buildin.workflow.nodes.expr import resolve_expr
 from starring.agents.buildin.workflow.state import WorkflowState
 from starring.agents.middlewares.subagent_deliverable import SubAgentDeliverable
-
-# 仅匹配"整串表达式"（不支持字符串内插值拼接），与设计 §2.3 约定一致
-_EXPR_PATTERN = re.compile(r"^\s*\{\{(.+)\}\}\s*$", re.DOTALL)
 
 
 def _resolve_args(args: dict[str, Any], state: WorkflowState) -> dict[str, Any]:
@@ -30,17 +26,12 @@ def _resolve_args(args: dict[str, Any], state: WorkflowState) -> dict[str, Any]:
     求值上下文与 condition 节点的 when 表达式一致（node_outputs 变量），
     求值失败 fail-fast 抛错，不静默降级为字面量。
     """
-    eval_context = {"node_outputs": state.get("node_outputs", {})}
     resolved: dict[str, Any] = {}
     for key, value in args.items():
-        match = _EXPR_PATTERN.match(value) if isinstance(value, str) else None
-        if match:
-            try:
-                resolved[key] = safe_eval(match.group(1).strip(), eval_context)
-            except (ValueError, TypeError, KeyError, AttributeError) as exc:
-                raise ValueError(f"tool 节点参数 {key!r} 的表达式 {value!r} 求值失败: {exc}") from exc
-        else:
-            resolved[key] = value
+        try:
+            resolved[key] = resolve_expr(value, state)
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise ValueError(f"tool 节点参数 {key!r} 的表达式 {value!r} 求值失败: {exc}") from exc
     return resolved
 
 

@@ -8,7 +8,7 @@
       <span v-if="llmToolCount" class="wf-node-badge">{{ llmToolCount }} 工具</span>
     </div>
 
-    <!-- llm / application-call / tool 摘要行 -->
+    <!-- llm / application-call / tool / kb-retrieval 摘要行 -->
     <div v-if="summary" class="wf-node-summary">{{ summary }}</div>
 
     <!-- condition 分支行：每个 case 一个 source handle -->
@@ -67,6 +67,10 @@ const summary = computed(() => {
   }
   if (props.type === 'tool') {
     return config.tool_name || '未选择工具'
+  }
+  if (props.type === 'kb-retrieval') {
+    const count = config.kb_ids?.length || 0
+    return count > 0 ? `检索 ${count} 个知识库` : '检索全部可见知识库'
   }
   return ''
 })
