@@ -461,6 +461,11 @@ div.header,
     flex-shrink: 0;
   }
 
+  // 底部区域（GitHub + 用户信息）推到侧边栏最下方
+  .foo {
+    margin-top: auto;
+  }
+
   .sidebar-brand {
     display: flex;
     align-items: center;
