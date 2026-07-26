@@ -72,6 +72,9 @@ const summary = computed(() => {
     const count = config.kb_ids?.length || 0
     return count > 0 ? `检索 ${count} 个知识库` : '检索全部可见知识库'
   }
+  if (props.type === 'human-review') {
+    return config.message || '未配置审核提示语'
+  }
   return ''
 })
 

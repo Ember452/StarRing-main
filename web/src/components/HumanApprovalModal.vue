@@ -1,7 +1,24 @@
 <template>
   <transition name="slide-up">
     <div v-if="visible" class="approval-modal">
-      <div class="approval-content">
+      <!-- human_review 审批卡片：消息 + 批准/拒绝 + 意见 -->
+      <div v-if="interruptType === 'human_review' && humanReview" class="approval-content human-review-content">
+        <div class="approval-header">
+          <h4>{{ humanReview.nodeName }}</h4>
+        </div>
+        <div class="human-review-message">{{ humanReview.message }}</div>
+        <div class="human-review-comment">
+          <textarea
+            v-model.trim="reviewComment"
+            :disabled="isProcessing"
+            placeholder="可选：填写审批意见"
+            rows="2"
+          />
+        </div>
+      </div>
+
+      <!-- 原有 question-based 审批 -->
+      <div v-else class="approval-content">
         <div v-if="normalizedQuestions.length > 1" class="question-tabs">
           <button
             v-for="(questionItem, questionIndex) in normalizedQuestions"
@@ -73,7 +90,14 @@
         </div>
       </div>
 
-      <div class="approval-actions">
+      <!-- human_review 审批按钮 -->
+      <div v-if="interruptType === 'human_review'" class="approval-actions">
+        <button class="btn btn-reject" @click="handleReject" :disabled="isProcessing">拒绝</button>
+        <button class="btn btn-approve" @click="handleApprove" :disabled="isProcessing">批准</button>
+      </div>
+
+      <!-- 原有 question-based 审批按钮 -->
+      <div v-else class="approval-actions">
         <button class="btn btn-reject" @click="handleCancel" :disabled="isProcessing">取消</button>
         <button
           class="btn btn-approve"
@@ -102,7 +126,9 @@ import {
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
-  questions: { type: Array, default: () => [] }
+  questions: { type: Array, default: () => [] },
+  interruptType: { type: String, default: '' },
+  humanReview: { type: Object, default: null }
 })
 
 const emit = defineEmits(['submit', 'cancel'])
@@ -111,6 +137,7 @@ const isProcessing = ref(false)
 const activeQuestionIndex = ref(0)
 const selectedValues = ref({})
 const otherTexts = ref({})
+const reviewComment = ref('')
 
 const normalizedQuestions = computed(() => {
   const questions = normalizeQuestions(props.questions)
@@ -135,6 +162,7 @@ const resetForm = () => {
   activeQuestionIndex.value = 0
   selectedValues.value = {}
   otherTexts.value = {}
+  reviewComment.value = ''
 }
 
 const setActiveQuestion = (index) => {
@@ -325,7 +353,20 @@ const handlePrimaryAction = () => {
 
 const handleCancel = () => {
   if (isProcessing.value) return
+  // human_review 拒绝：等同取消，emit cancel
   emit('cancel')
+}
+
+const handleReject = () => {
+  if (isProcessing.value) return
+  isProcessing.value = true
+  emit('submit', { action: 'reject', comment: reviewComment.value })
+}
+
+const handleApprove = () => {
+  if (isProcessing.value) return
+  isProcessing.value = true
+  emit('submit', { action: 'approve', comment: reviewComment.value })
 }
 </script>
 

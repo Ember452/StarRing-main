@@ -828,10 +828,13 @@ async def check_and_handle_interrupts(
     meta: dict,
     thread_id: str,
 ) -> AsyncIterator[bytes]:
-    """检测 LangGraph 的 interrupt 状态，如有则推送 ``ask_user_question_required`` chunk。
+    """检测 LangGraph 的 interrupt 状态，按类型分流下发 chunk。
 
-    当智能体执行到 ``interrupt`` 节点（例如主动向用户提问）时，从 state.tasks 或 ``__interrupt__``
-    中提取中断信息，标准化为问题载荷并下发，前端据此渲染选择题等交互组件。
+    - ``interrupt_type === "human_review"``：下发 ``human_approval_required`` chunk，
+      前端渲染审批卡片（消息 + 批准/拒绝按钮 + 意见输入）。
+    - 其他（含无 interrupt_type 的历史 interrupt）：下发 ``ask_user_question_required``
+      chunk，前端渲染选择题等交互组件。
+
     任何异常都被捕获并记录，避免中断检查失败影响主流程。
     """
     try:
@@ -843,9 +846,24 @@ async def check_and_handle_interrupts(
 
         interrupt_info = _extract_interrupt_info(state)
         if interrupt_info:
-            question_payload = _build_ask_user_question_payload(interrupt_info, thread_id)
-            meta["interrupt"] = question_payload
-            yield make_chunk(status="ask_user_question_required", meta=meta, **question_payload)
+            payload = _coerce_interrupt_payload(interrupt_info)
+
+            # 人工审核中断（human-review 节点）：按审批协议分流
+            if isinstance(payload, dict) and payload.get("interrupt_type") == "human_review":
+                approval_payload = {
+                    "interrupt_type": "human_review",
+                    "node_id": payload.get("node_id"),
+                    "node_name": payload.get("node_name"),
+                    "message": payload.get("message") or "请审核",
+                    "source": str(payload.get("source") or "human_review"),
+                    "thread_id": thread_id,
+                }
+                meta["interrupt"] = approval_payload
+                yield make_chunk(status="human_approval_required", meta=meta, **approval_payload)
+            else:
+                question_payload = _build_ask_user_question_payload(interrupt_info, thread_id)
+                meta["interrupt"] = question_payload
+                yield make_chunk(status="ask_user_question_required", meta=meta, **question_payload)
 
     except Exception as e:
         logger.exception(f"Error checking interrupts: {e}")
@@ -1400,7 +1418,7 @@ async def stream_agent_chat(
         #   - values：智能体状态快照，仅在签名变化时下发 agent_state
         #   - stream_event：底层协议事件透传（如子智能体工具调用进度）
         #   - messages：AI 生成内容的增量 chunk（主智能体与子智能体）
-        async for mode, payload in _stream_agent_events(
+        async for mode, payload in _stream_agent_events( # payload是什么取决于model类型，在model是Message时是一个元组
             agent,
             messages,
             input_context=input_context,
@@ -1434,7 +1452,7 @@ async def stream_agent_chat(
             # ----- 11c. messages 模式：AI 内容增量 chunk -----
             # 包含主智能体和子智能体的消息，
             # 子智能体 chunk 通过 namespace 和 thread_id 区分
-            msg, metadata = payload
+            msg, metadata = payload  # mag: AI产出的增量文本     metadata：上下文信息
             namespace = _metadata_namespace(metadata)
             chunk_thread_id = _metadata_thread_id(metadata, thread_id if not namespace else None)
             # 子智能体 chunk 必须能解析出 thread_id，否则丢弃（无法关联上下文）

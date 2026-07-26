@@ -18,7 +18,32 @@ const extractQuestionPayload = (chunk) => {
   }
 }
 
+/** 判断 chunk 是否为 human_review 审批中断 */
+const isHumanReviewChunk = (chunk) =>
+  chunk?.status === 'human_approval_required' && chunk?.interrupt_type === 'human_review'
+
+const extractHumanReviewPayload = (chunk) => ({
+  interruptType: 'human_review',
+  message: chunk?.message || '请审核',
+  nodeName: chunk?.node_name || '审核节点',
+  nodeId: chunk?.node_id || '',
+  source: chunk?.source || 'human_review',
+})
+
 export const extractPendingInterrupt = (chunk, threadId) => {
+  // human_review 审批中断：不需要 questions，直接构建审批 payload
+  if (isHumanReviewChunk(chunk)) {
+    return {
+      questions: [],
+      interruptType: 'human_review',
+      humanReview: extractHumanReviewPayload(chunk),
+      source: chunk?.source || 'human_review',
+      status: chunk?.status || '',
+      threadId: chunk?.thread_id || threadId,
+      parentRunId: chunk?.run_id || chunk?.parent_run_id || null
+    }
+  }
+
   const payload = extractQuestionPayload(chunk)
   if (!payload.questions.length) return null
 
@@ -37,7 +62,9 @@ export function useApproval({ getThreadState, fetchThreadMessages }) {
     questions: [],
     status: '',
     threadId: null,
-    parentRunId: null
+    parentRunId: null,
+    interruptType: '',
+    humanReview: null
   })
 
   const applyInterruptToApprovalState = (pendingInterrupt, fallbackThreadId) => {
@@ -46,6 +73,8 @@ export function useApproval({ getThreadState, fetchThreadMessages }) {
     approvalState.status = pendingInterrupt.status || ''
     approvalState.threadId = pendingInterrupt.threadId || fallbackThreadId
     approvalState.parentRunId = pendingInterrupt.parentRunId || null
+    approvalState.interruptType = pendingInterrupt.interruptType || ''
+    approvalState.humanReview = pendingInterrupt.humanReview || null
   }
 
   const clearApprovalState = () => {
@@ -54,6 +83,8 @@ export function useApproval({ getThreadState, fetchThreadMessages }) {
     approvalState.status = ''
     approvalState.threadId = null
     approvalState.parentRunId = null
+    approvalState.interruptType = ''
+    approvalState.humanReview = null
   }
 
   const processApprovalInStream = (chunk, threadId, currentAgentId) => {
@@ -80,7 +111,9 @@ export function useApproval({ getThreadState, fetchThreadMessages }) {
   const restoreInterruptFromThreadState = (threadId) => {
     const threadState = getThreadState(threadId)
     const pendingInterrupt = threadState?.pendingInterrupt
-    if (!pendingInterrupt?.questions?.length) return false
+    if (!pendingInterrupt) return false
+    // human_review：有 interruptType 无 questions 亦可恢复
+    if (!pendingInterrupt.interruptType && !pendingInterrupt.questions?.length) return false
 
     threadState.isStreaming = false
     threadState.replyLoadingVisible = false

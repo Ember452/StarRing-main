@@ -17,8 +17,8 @@ class Node(BaseModel):
     """工作流节点定义。"""
 
     id: str = Field(description="节点唯一 ID（在工作流内唯一）")
-    node_type: Literal["start-end", "llm", "condition", "application-call", "tool", "kb-retrieval"] = Field(
-        description="节点类型"
+    node_type: Literal["start-end", "llm", "condition", "application-call", "tool", "kb-retrieval", "human-review"] = (
+        Field(description="节点类型")
     )
     name: str = Field(default="", description="节点展示名")
     config: dict[str, Any] = Field(default_factory=dict, description="节点类型特定配置")
@@ -75,6 +75,10 @@ class Node(BaseModel):
             top_k = self.config.get("top_k")
             if top_k is not None and (not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= 50):
                 raise ValueError(f"kb-retrieval 节点 {self.id} 的 config.top_k 必须是 1-50 的整数")
+        elif self.node_type == "human-review":
+            message = self.config.get("message")
+            if not message or not isinstance(message, str):
+                raise ValueError(f"human-review 节点 {self.id} 缺少 config.message（审核提示语，支持 {{{{ expr }}}}）")
 
         # 重试策略（可选，适用于所有可执行节点）：失败重试 retry_count 次后仍 fail-fast
         if self.node_type != "start-end":

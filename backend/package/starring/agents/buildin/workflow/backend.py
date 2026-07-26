@@ -27,6 +27,9 @@ from starring.agents.buildin.workflow.nodes import (
 )
 from starring.agents.buildin.workflow.nodes import get_node_executor
 from starring.agents.buildin.workflow.nodes import (
+    human_review as _human_review_module,  # noqa: F401 触发 @register_node
+)
+from starring.agents.buildin.workflow.nodes import (
     kb_retrieval as _kb_retrieval_module,  # noqa: F401 触发 @register_node
 )
 from starring.agents.buildin.workflow.nodes import (
@@ -81,7 +84,7 @@ class WorkflowBackend(BaseAgent):
             f"edges={len(definition.edges)}, version={definition.version}"
         )
 
-        return self._build_state_graph(definition, ctx)
+        return self._build_state_graph(definition, ctx, checkpointer=await self._get_checkpointer())
 
     async def _load_definition(self, context: WorkflowContext) -> WorkflowDefinition:
         """从 context 加载工作流定义。
@@ -117,7 +120,9 @@ class WorkflowBackend(BaseAgent):
             context.workflow_version = workflow.version
             return definition
 
-    def _build_state_graph(self, definition: WorkflowDefinition, context: WorkflowContext) -> CompiledStateGraph:
+    def _build_state_graph(
+        self, definition: WorkflowDefinition, context: WorkflowContext, checkpointer=None
+    ) -> CompiledStateGraph:
         """把工作流定义编译为 LangGraph StateGraph。
 
         步骤：
@@ -174,10 +179,10 @@ class WorkflowBackend(BaseAgent):
         builder.set_finish_point(end_id)
 
         # 4. 编译
-        # checkpointer 不在这里绑定：LangGraph 支持在 astream/ainvoke 时通过 config={"configurable": {"checkpoint_ns": ...}}
-        # 传入 checkpointer，由调用方（chat_service / agent_run_service）统一管理持久化后端，
-        # 这样同一个编译产物可以在不同 thread / 不同 checkpointer 下复用。
-        return builder.compile()
+        # 绑定 checkpointer（同 chatbot/supervisor 的 BaseAgent._get_checkpointer 做法）：
+        # human-review 节点 interrupt 后恢复执行依赖检查点持久化，thread_id 由调用方
+        # （chat_service）通过 config 传入。
+        return builder.compile(checkpointer=checkpointer)
 
     async def _wrap_node_executor(
         self,

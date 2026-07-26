@@ -296,6 +296,21 @@
             </div>
           </template>
 
+          <!-- human-review -->
+          <template v-else-if="selectedNode.type === 'human-review'">
+            <div class="field">
+              <div class="field-label required">审核提示语</div>
+              <a-textarea
+                v-model:value="selectedNode.data.config.message"
+                :rows="3"
+                placeholder="审核提示语，支持内嵌表达式引用上游输出"
+              />
+              <div class="field-tip">
+                运行到此节点时将暂停等待人工审核，消息支持 {{ toolArgsExprExample }} 这类内嵌表达式。
+              </div>
+            </div>
+          </template>
+
           <!-- 高级：节点级重试（非 start-end 节点通用） -->
           <a-collapse v-if="selectedNode.type !== 'start-end'" ghost class="advanced-collapse">
             <a-collapse-panel key="advanced" header="高级">
@@ -373,7 +388,8 @@ const nodeTypes = {
   condition: nodeCard,
   'application-call': nodeCard,
   tool: nodeCard,
-  'kb-retrieval': nodeCard
+  'kb-retrieval': nodeCard,
+  'human-review': nodeCard
 }
 
 const { screenToFlowCoordinate, getViewport, setViewport, fitView, removeNodes, addEdges } =

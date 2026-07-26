@@ -2,7 +2,7 @@
  * 工作流节点类型元数据
  * 与后端 backend/package/StarRing/agents/buildin/workflow/definition.py 的节点契约对齐
  */
-import { Play, Flag, Sparkles, GitBranch, AppWindow, Wrench, Database } from 'lucide-vue-next'
+import { Play, Flag, Sparkles, GitBranch, AppWindow, Wrench, Database, UserCheck } from 'lucide-vue-next'
 
 /**
  * 节点类型展示配置（色系遵循 design.md：start/end=灰、llm=主色、condition=警告、application-call/kb-retrieval=信息、tool=成功）
@@ -59,6 +59,13 @@ export const NODE_META = {
     icon: Database,
     color: 'var(--color-info-700)',
     bg: 'var(--color-info-50)'
+  },
+  'human-review': {
+    nodeType: 'human-review',
+    label: '人工审核',
+    icon: UserCheck,
+    color: 'var(--color-warning-700)',
+    bg: 'var(--color-warning-50)'
   }
 }
 
@@ -97,6 +104,8 @@ export function createFlowNode(metaKey, position) {
     config.query = ''
     config.kb_ids = []
     config.top_k = 5
+  } else if (metaKey === 'human-review') {
+    config.message = ''
   }
   return {
     id,

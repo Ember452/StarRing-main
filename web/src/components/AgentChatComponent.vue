@@ -127,6 +127,8 @@
             <HumanApprovalModal
               :visible="currentApprovalModalVisible"
               :questions="currentApprovalQuestions"
+              :interrupt-type="approvalState.interruptType"
+              :human-review="approvalState.humanReview"
               @submit="handleQuestionSubmit"
               @cancel="handleQuestionCancel"
             />
