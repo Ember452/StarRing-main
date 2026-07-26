@@ -14,7 +14,6 @@
             class="conversation-item"
             :class="{ active: currentChatId === chat.id }"
             @click="$emit('select-chat', chat.id)"
-            @click.middle="$emit('delete-chat', chat.id)"
           >
             <span class="conversation-title">{{ chat.title || '新的对话' }}</span>
             <span class="actions-mask"></span>

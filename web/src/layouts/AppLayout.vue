@@ -10,7 +10,6 @@ import {
   FolderKanban,
   PanelLeftClose,
   PanelLeftOpen,
-  MessageCirclePlus,
   AlarmClock,
   Workflow,
   Database
@@ -29,7 +28,7 @@ import UserInfoComponent from '@/components/UserInfoComponent.vue'
 import DebugComponent from '@/components/DebugComponent.vue'
 import TaskCenterDrawer from '@/components/TaskCenterDrawer.vue'
 import SettingsModal from '@/components/SettingsModal.vue'
-import ConversationNavSection from '@/components/ConversationNavSection.vue'
+import NewChatNavItem from '@/components/NewChatNavItem.vue'
 
 const configStore = useConfigStore()
 const agentStore = useAgentStore()
@@ -124,16 +123,7 @@ const organizationName = computed(() => {
 
 // 下面是导航菜单部分，添加智能体项
 const mainList = computed(() => {
-  const items = [
-    {
-      name: '创建新对话',
-      path: '/agent',
-      icon: MessageCirclePlus,
-      activeIcon: MessageCirclePlus,
-      action: true,
-      exactActive: true
-    }
-  ]
+  const items = []
 
   items.push({
     name: '工作区',
@@ -306,6 +296,18 @@ provide('settingsModal', {
         </button>
       </div>
       <div class="nav">
+        <NewChatNavItem
+          :current-chat-id="activeConversationThreadId"
+          :chats-list="threads"
+          :has-more-chats="hasMoreThreads"
+          :is-loading-more="isLoadingMoreThreads"
+          :collapsed="sidebarCollapsed"
+          @select-chat="handleSelectChat"
+          @delete-chat="handleDeleteChat"
+          @rename-chat="handleRenameChat"
+          @toggle-pin="handleTogglePinChat"
+          @load-more-chats="() => chatThreadsStore.loadMoreThreads()"
+        />
         <!-- 使用mainList渲染导航项 -->
         <RouterLink
           v-for="(item, index) in mainList"
@@ -327,21 +329,6 @@ provide('settingsModal', {
           </a-tooltip>
           <span class="nav-text">{{ item.name }}</span>
         </RouterLink>
-      </div>
-      <div class="fill">
-        <ConversationNavSection
-          v-if="!sidebarCollapsed"
-          class="sidebar-conversations"
-          :current-chat-id="activeConversationThreadId"
-          :chats-list="threads"
-          :has-more-chats="hasMoreThreads"
-          :is-loading-more="isLoadingMoreThreads"
-          @select-chat="handleSelectChat"
-          @delete-chat="handleDeleteChat"
-          @rename-chat="handleRenameChat"
-          @toggle-pin="handleTogglePinChat"
-          @load-more-chats="() => chatThreadsStore.loadMoreThreads()"
-        />
       </div>
       <div class="foo">
         <div class="github nav-item" @click.stop>
@@ -468,22 +455,10 @@ div.header,
     gap: 4px;
   }
 
-  .sidebar-conversations {
-    height: 100%;
-    min-height: 0;
-    overflow: hidden;
-  }
-
   .sidebar-brand,
-  :deep(.conversation-nav-section:not(.sidebar-conversations)),
   .github,
   .user-info {
     flex-shrink: 0;
-  }
-
-  .fill {
-    flex: 1 1 0;
-    min-height: 0;
   }
 
   .sidebar-brand {
