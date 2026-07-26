@@ -66,9 +66,14 @@ def _build_validation_response(definition_dict: dict) -> dict:
 
     用于 ``POST /workflows/validate`` 与 ``POST /workflows/{id}/validate``
     两个端点共享校验与响应构造逻辑。
+
+    校验通过后附加 warnings（不阻断保存）：
+    - 从 start 不可达的孤立节点
+    - condition 节点缺少 default 分支
     """
     try:
         definition = WorkflowDefinition.model_validate(definition_dict)
+        warnings = _compute_definition_warnings(definition)
         return {
             "valid": True,
             "node_count": len(definition.nodes),
@@ -76,9 +81,67 @@ def _build_validation_response(definition_dict: dict) -> dict:
             "start_node_id": definition.get_start_node_id(),
             "end_node_id": definition.get_end_node_id(),
             "version": definition.version,
+            "warnings": warnings,
         }
     except Exception as exc:
         return {"valid": False, "error": str(exc)}
+
+
+def _compute_definition_warnings(definition: WorkflowDefinition) -> list[dict]:
+    """对已通过 _validate_graph 的工作流定义做 warning 级检查。
+
+    返回 warning dict 列表（各 warning 含 type 与 message 字段），
+    不阻断保存，仅供前端编辑器实时提示。
+    """
+    warnings: list[dict] = []
+    node_ids = {n.id for n in definition.nodes}
+
+    # 1. 从 start 不可达的孤立节点（BFS）
+    start_id = definition.get_start_node_id()
+    # 构建邻接表
+    adj: dict[str, list[str]] = {n.id: [] for n in definition.nodes}
+    for edge in definition.edges:
+        adj.setdefault(edge.source, []).append(edge.target)
+    # condition 节点：把 config.cases[i].then 与 default 也纳入邻接表
+    for node in definition.nodes:
+        if node.node_type == "condition":
+            for case in node.config.get("cases") or []:
+                then_branch = case.get("then")
+                if isinstance(then_branch, str) and then_branch in node_ids:
+                    adj.setdefault(node.id, []).append(then_branch)
+            default_branch = node.config.get("default")
+            if isinstance(default_branch, str) and default_branch in node_ids:
+                adj.setdefault(node.id, []).append(default_branch)
+
+    reachable = set()
+    if start_id in adj:
+        stack = [start_id]
+        while stack:
+            nid = stack.pop()
+            if nid in reachable:
+                continue
+            reachable.add(nid)
+            stack.extend(adj.get(nid, []))
+
+    orphan_ids = node_ids - reachable
+    for nid in orphan_ids:
+        node = definition.get_node(nid)
+        warnings.append({
+            "type": "orphan_node",
+            "node_id": nid,
+            "message": f"节点 {nid}（{node.name or node.node_type}）从 start 不可达，执行时会被跳过",
+        })
+
+    # 2. condition 节点缺少 default 分支
+    for node in definition.nodes:
+        if node.node_type == "condition" and not node.config.get("default"):
+            warnings.append({
+                "type": "missing_default",
+                "node_id": node.id,
+                "message": f"condition 节点 {node.id} 缺少 default 分支，所有 case 都不命中时工作流可能卡住",
+            })
+
+    return warnings
 
 
 # ---------------------------------------------------------------------------
