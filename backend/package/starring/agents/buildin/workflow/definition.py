@@ -76,6 +76,20 @@ class Node(BaseModel):
             if top_k is not None and (not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= 50):
                 raise ValueError(f"kb-retrieval 节点 {self.id} 的 config.top_k 必须是 1-50 的整数")
 
+        # 重试策略（可选，适用于所有可执行节点）：失败重试 retry_count 次后仍 fail-fast
+        if self.node_type != "start-end":
+            retry_count = self.config.get("retry_count")
+            if retry_count is not None and (
+                not isinstance(retry_count, int) or isinstance(retry_count, bool) or not 0 <= retry_count <= 5
+            ):
+                raise ValueError(f"节点 {self.id} 的 config.retry_count 必须是 0-5 的整数")
+            retry_interval = self.config.get("retry_interval")
+            if retry_interval is not None and (
+                not isinstance(retry_interval, (int, float))
+                or isinstance(retry_interval, bool)
+                or not 0 <= retry_interval <= 60
+            ):
+                raise ValueError(f"节点 {self.id} 的 config.retry_interval 必须是 0-60 的数字（秒）")
         return self
 
 

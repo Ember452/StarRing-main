@@ -296,6 +296,33 @@
             </div>
           </template>
 
+          <!-- 高级：节点级重试（非 start-end 节点通用） -->
+          <a-collapse v-if="selectedNode.type !== 'start-end'" ghost class="advanced-collapse">
+            <a-collapse-panel key="advanced" header="高级">
+              <div class="field">
+                <div class="field-label">失败重试次数</div>
+                <a-input-number
+                  v-model:value="selectedNode.data.config.retry_count"
+                  :min="0"
+                  :max="5"
+                  placeholder="默认 0 不重试"
+                  style="width: 100%"
+                />
+              </div>
+              <div class="field">
+                <div class="field-label">重试间隔（秒）</div>
+                <a-input-number
+                  v-model:value="selectedNode.data.config.retry_interval"
+                  :min="0"
+                  :max="60"
+                  placeholder="默认 1"
+                  style="width: 100%"
+                />
+                <div class="field-tip">重试超限后节点仍按失败处理，不会跳过</div>
+              </div>
+            </a-collapse-panel>
+          </a-collapse>
+
           <a-button danger block class="delete-node-btn" @click="removeSelectedNode">
             删除节点
           </a-button>
@@ -932,6 +959,20 @@ function goBack() {
 
   .delete-node-btn {
     margin-top: 8px;
+  }
+
+  .advanced-collapse {
+    margin-top: 4px;
+
+    :deep(.ant-collapse-header) {
+      padding: 6px 0;
+      font-size: 13px;
+      color: var(--color-gray-500);
+    }
+
+    :deep(.ant-collapse-content-box) {
+      padding: 0 0 4px;
+    }
   }
 }
 

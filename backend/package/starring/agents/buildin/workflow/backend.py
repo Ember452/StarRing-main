@@ -8,9 +8,11 @@ WorkflowBackend 继承 BaseAgent，把持久化的工作流定义（nodes + edge
 
 from __future__ import annotations
 
+import asyncio
 from functools import partial
 from typing import Any
 
+from langgraph.errors import GraphInterrupt
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -184,15 +186,33 @@ class WorkflowBackend(BaseAgent):
         context: WorkflowContext,
         state: WorkflowState,
     ) -> Any:
-        """包装节点执行器，统一异常处理与日志。
+        """包装节点执行器，统一异常处理、重试与日志。
 
         LangGraph 节点函数签名是 (state) -> dict，这里通过 partial 绑定 executor/node/context。
+        节点 config 可选 retry_count（0-5，默认 0 不重试）/ retry_interval（秒，默认 1）：
+        失败后等待 retry_interval 再重试，超限后原样抛出（fail-fast，不做跳过）。
         """
+        config = node.config or {}
+        retry_count = int(config.get("retry_count") or 0)
+        retry_interval_cfg = config.get("retry_interval")
+        retry_interval = float(retry_interval_cfg) if retry_interval_cfg is not None else 1.0
+
         logger.debug(f"工作流节点 {node.id} ({node.node_type}) 开始执行")
-        try:
-            result = await executor(state, node, context)
-            logger.debug(f"工作流节点 {node.id} 执行完成: {type(result).__name__}")
-            return result
-        except Exception as exc:
-            logger.error(f"工作流节点 {node.id} 执行失败: {exc}", exc_info=True)
-            raise
+        for attempt in range(retry_count + 1):
+            try:
+                result = await executor(state, node, context)
+                logger.debug(f"工作流节点 {node.id} 执行完成: {type(result).__name__}")
+                return result
+            except GraphInterrupt:
+                # interrupt 是控制流（如 human-review 等待审批），不是失败，不参与重试
+                raise
+            except Exception as exc:
+                if attempt < retry_count:
+                    logger.warning(
+                        f"工作流节点 {node.id} 第 {attempt + 1}/{retry_count} 次重试"
+                        f"（{retry_interval}s 后）: {exc}"
+                    )
+                    await asyncio.sleep(retry_interval)
+                    continue
+                logger.error(f"工作流节点 {node.id} 执行失败: {exc}", exc_info=True)
+                raise
