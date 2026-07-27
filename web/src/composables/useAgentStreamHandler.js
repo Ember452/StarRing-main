@@ -77,6 +77,22 @@ const toolFinishedMessage = (chunk) => {
   return { ...output, type: 'tool', id }
 }
 
+// DeepReport 流水线进度事件（method=custom，图节点 get_stream_writer 写入）：
+// 按阶段/章节归并进 threadState.deepreportProgress，驱动进度卡片渲染。
+const applyDeepReportProgress = (threadState, data) => {
+  const progress = threadState.deepreportProgress || { stages: {}, chapters: {} }
+  if (data.stage === 'research' && data.chapter_id) {
+    progress.chapters[data.chapter_id] = data
+  } else {
+    // 重新规划（replan）会再次进入 plan：清掉上一版大纲的章节进度
+    if (data.stage === 'plan' && data.status === 'started') {
+      progress.chapters = {}
+    }
+    progress.stages[data.stage] = data
+  }
+  threadState.deepreportProgress = progress
+}
+
 export function useAgentStreamHandler({
   getThreadState,
   processApprovalInStream,
@@ -113,6 +129,8 @@ export function useAgentStreamHandler({
     switch (status) {
       case 'init':
         {
+          // 新一轮运行开始：清空上一轮 DeepReport 进度，避免陈旧进度残留
+          threadState.deepreportProgress = null
           const resolvedRequestId = request_id || threadState.pendingRequestId
           if (resolvedRequestId) {
             threadState.pendingRequestId = resolvedRequestId
@@ -158,6 +176,12 @@ export function useAgentStreamHandler({
 
       case 'stream_event':
         {
+          // DeepReport 进度事件：不进消息流，只更新线程级进度状态
+          const streamEvent = chunk.event
+          if (streamEvent?.method === 'custom' && streamEvent.data?.source === 'deepreport_progress') {
+            applyDeepReportProgress(threadState, streamEvent.data)
+            return false
+          }
           // 工具结果需立即落地（不经平滑层），写入 msgChunks 后由 convertToolResultToMessages
           // 按 tool_call_id 关联到对应 AI 消息的 tool_call，驱动其完成态。
           const toolMessage = toolFinishedMessage(chunk)

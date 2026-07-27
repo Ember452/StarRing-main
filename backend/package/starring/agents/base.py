@@ -399,8 +399,8 @@ class BaseAgent:
                 elif method == "values" and not namespace:
                     # ② 顶层状态快照：仅根图（namespace 为空），直接透传
                     yield "values", data
-                elif method in {"tasks", "tools", "lifecycle"}:
-                    # ③ 自定义事件：tasks / tools（需规范化）/ lifecycle
+                elif method in {"tasks", "tools", "lifecycle", "custom"}:
+                    # ③ 自定义事件：tasks / tools（需规范化）/ lifecycle / custom（图内 get_stream_writer 写入）
                     if method == "tools":
                         data = _normalize_tool_event_data(data)
                     event_payload = {

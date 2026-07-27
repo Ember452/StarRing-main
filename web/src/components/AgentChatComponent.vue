@@ -110,6 +110,12 @@
               </div>
             </template>
 
+            <!-- DeepReport 流水线进度卡片（custom 进度事件驱动，仅生成期间展示） -->
+            <DeepReportProgressCard
+              v-if="currentDeepReportProgress && (isProcessing || isReplyLoading)"
+              :progress="currentDeepReportProgress"
+            />
+
             <!-- 生成中的加载状态 - 增强条件支持主聊天和resume流程 -->
             <div class="generating-status" v-if="isReplyLoading && conversations.length > 0">
               <div class="generating-indicator">
@@ -622,6 +628,7 @@ import { useAgentStreamHandler } from '@/composables/useAgentStreamHandler'
 import { useStreamSmoother } from '@/composables/useStreamSmoother'
 import { useAgentMentionConfig } from '@/composables/useAgentMentionConfig'
 import AgentArtifactsCard from '@/components/AgentArtifactsCard.vue'
+import DeepReportProgressCard from '@/components/DeepReportProgressCard.vue'
 import AgentPanel from '@/components/AgentPanel.vue'
 import AttachmentTmpUploadModal from '@/components/AttachmentTmpUploadModal.vue'
 import SubagentThreadModal from '@/components/SubagentThreadModal.vue'
@@ -1386,6 +1393,9 @@ const shouldShowArtifacts = computed(() => {
 const currentThreadState = computed(() => {
   return getThreadState(currentChatId.value)
 })
+
+// DeepReport 流水线进度（useAgentStreamHandler 归并的 custom 进度事件）
+const currentDeepReportProgress = computed(() => currentThreadState.value?.deepreportProgress || null)
 
 const getThreadOngoingMessages = (threadId) => {
   const threadState = getThreadState(threadId)
