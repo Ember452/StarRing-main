@@ -1418,7 +1418,7 @@ async def stream_agent_chat(
         #   - values：智能体状态快照，仅在签名变化时下发 agent_state
         #   - stream_event：底层协议事件透传（如子智能体工具调用进度）
         #   - messages：AI 生成内容的增量 chunk（主智能体与子智能体）
-        async for mode, payload in _stream_agent_events( # payload是什么取决于model类型，在model是Message时是一个元组
+        async for mode, payload in _stream_agent_events(  # payload是什么取决于model类型，在model是Message时是一个元组
             agent,
             messages,
             input_context=input_context,

@@ -43,9 +43,7 @@ async def execute_application_call(state: WorkflowState, node: Node, context: Wo
     user_input = _build_node_input(state, node.id)
     input_template = config.get("input_template")
     if input_template:
-        rendered = render_template(
-            input_template, state, where=f"application-call 节点 {node.id} 的 input_template"
-        )
+        rendered = render_template(input_template, state, where=f"application-call 节点 {node.id} 的 input_template")
         user_input = f"{rendered}\n\n{user_input}"
 
     # 按 agents.slug 查库解析目标智能体（延迟导入避免循环依赖），

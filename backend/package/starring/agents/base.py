@@ -422,7 +422,7 @@ class BaseAgent:
 
     async def stream_messages_with_state(self, messages: list[str], input_context=None, **kwargs):
         """以带状态信息的富事件模式流式输出消息。
-
+            将普通Message列表适配成_stream_input_with_state期望的字典格式
         是对 _stream_input_with_state 的封装，输入为普通消息列表。
         输出包含 messages、values、stream_event 等多种事件类型。
         """

@@ -214,8 +214,7 @@ class WorkflowBackend(BaseAgent):
             except Exception as exc:
                 if attempt < retry_count:
                     logger.warning(
-                        f"工作流节点 {node.id} 第 {attempt + 1}/{retry_count} 次重试"
-                        f"（{retry_interval}s 后）: {exc}"
+                        f"工作流节点 {node.id} 第 {attempt + 1}/{retry_count} 次重试（{retry_interval}s 后）: {exc}"
                     )
                     await asyncio.sleep(retry_interval)
                     continue

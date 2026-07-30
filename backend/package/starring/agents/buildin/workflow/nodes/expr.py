@@ -49,6 +49,7 @@ def render_template(text: str, state: WorkflowState, *, where: str = "模板") -
 
     不含 {{ }} 的文本原样返回（与字面量行为完全一致）。
     """
+
     def _replace(match: re.Match) -> str:
         expr = match.group(1).strip()
         try:
