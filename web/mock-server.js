@@ -88,7 +88,7 @@ function getMockResponse(method, path) {
         organization: { name: 'StarRing', logo: '', avatar: '' },
         branding: {
           name: 'StarRing',
-          title: 'StarRing 智能知识库',
+          title: 'StarRing 星环智库',
           subtitle: '融合 RAG 与知识图谱的智能体开发平台',
           subtitles: [
             '融合 RAG 与知识图谱',

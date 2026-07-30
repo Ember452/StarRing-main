@@ -24,7 +24,7 @@
   --main-color: var(--main-700);
   --main-bright: #0188a6;
 
-  --gray-10000: #000000; /* 保持纯黑 */
+  --gray-10000: #1A1D21; /* 柔化黑，避免纯黑刺眼 */
   --gray-2000: #0c0d0d; /* 更精致的暗灰，用于极深背景 */
   --gray-1000: #151616; /* 深灰黑，适用于主文本 */
   --gray-900: #1e1f1f;
@@ -40,7 +40,7 @@
   --gray-50: #f5f7f7;
   --gray-25: #f8fafa;
   --gray-10: #fbfcfc;
-  --gray-0: #ffffff;
+  --gray-0: #FAFBFC; /* 微冷灰白，避免纯白刺眼 */
 
   /* Standard Color System - 标准5档色阶系统 */
   --color-primary-50: var(--main-50); /* 主色调-最浅 */

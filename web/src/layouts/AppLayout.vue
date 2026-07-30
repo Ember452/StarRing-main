@@ -434,10 +434,10 @@ div.header,
   justify-content: flex-start;
   align-items: stretch;
   gap: 16px;
-  background-color: var(--main-5);
+  background-color: var(--bg-sider, var(--main-5));
   height: 100%;
   width: @sidebar-width;
-  border-right: 1px solid var(--gray-100);
+  border-right: 1px solid var(--border-subtle, var(--gray-100));
   padding: @sidebar-padding;
   overflow: hidden;
   user-select: none;
@@ -500,12 +500,16 @@ div.header,
     min-width: 0;
     margin-left: 10px;
     overflow: hidden;
-    color: var(--gray-1000);
     font-size: 15px;
     font-weight: 650;
     line-height: 20px;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* 渐变文字效果 */
+    background: linear-gradient(135deg, var(--main-500), var(--main-700));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 
   .sidebar-toggle {

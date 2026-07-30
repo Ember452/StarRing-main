@@ -23,6 +23,7 @@
     "@vue-flow/core": "^1.48.2",
     "@vue-flow/minimap": "^1.5.4",
     "@vueuse/core": "^14.3.0",
+    "animejs": "^4.5.0",
     "ant-design-vue": "^4.2.6",
     "d3": "^7.9.0",
     "dayjs": "^1.11.20",
