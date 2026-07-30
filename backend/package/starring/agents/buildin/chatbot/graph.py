@@ -31,6 +31,7 @@ from starring.agents.middlewares import (
     create_summary_middleware,
     save_attachments_to_fs,
 )
+from starring.agents.middlewares.code_act import CodeActMiddleware
 from starring.agents.middlewares.knowledge_base import KnowledgeBaseMiddleware
 from starring.agents.middlewares.memory import MemoryMiddleware
 from starring.agents.middlewares.skills import SkillsMiddleware
@@ -92,6 +93,9 @@ async def _build_middlewares(context):
         middlewares.append(MemoryMiddleware(str(getattr(context, "uid", "") or "")))
     # Skills 工具自动发现：从已注册 toolkit 集合中挂载可用工具
     middlewares.append(SkillsMiddleware())
+    # CodeAct：仅当智能体显式开启 use_code_act 时挂载，提供 execute_python 工具
+    if getattr(context, "use_code_act", False):
+        middlewares.append(CodeActMiddleware(context))
     # Orchestrator-Worker 子智能体 task 工具：未配置子智能体时返回 None 跳过
     subagent_middleware = await create_subagent_task_middleware(context)
     if subagent_middleware:

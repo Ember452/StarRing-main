@@ -44,3 +44,14 @@ class ChatBotContext(BaseContext):  # 继承自 BaseContext，说明这是一个
             "type": "boolean",
         },
     )
+
+    # CodeAct 开关（智能体静态配置）：开启后挂载 CodeActMiddleware，
+    # 提供 execute_python 工具，模型可写 Python 代码在沙盒执行并经工具桥回调平台工具。
+    use_code_act: bool = field(
+        default=False,
+        metadata={
+            "name": "代码执行 (CodeAct)",
+            "description": "开启后智能体可编写 Python 代码在沙盒中执行并直接调用平台工具，适合多步数据处理与批量检索。",
+            "type": "boolean",
+        },
+    )

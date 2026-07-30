@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from server.routers.auth_router import auth
 from server.routers.agent_router import agent_router
 from server.routers.chat_router import chat
+from server.routers.codeact_router import codeact
 from server.routers.dashboard_router import dashboard
 from server.routers.auth_dept_router import department
 from server.routers.mcp_router import mcp
@@ -29,6 +30,7 @@ router.include_router(system)  # /api/system/* 系统状态与全局配置
 router.include_router(auth)  # /api/auth/* 登录、用户信息与 CLI 浏览器登录授权
 router.include_router(agent_router)  # /api/agent/* 智能体管理与运行态
 router.include_router(chat)  # /api/chat/* 对话线程、消息历史与附件
+router.include_router(codeact)  # /api/codeact/* CodeAct 工具桥（X-CodeAct-Token 鉴权，不走 JWT）
 
 # 管理与工作台接口：后台任务、权限域以及工具体系配置。
 router.include_router(dashboard)  # /api/dashboard/* 仪表盘聚合数据

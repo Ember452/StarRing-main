@@ -49,6 +49,9 @@ class Config(BaseModel):
     sandbox_exec_timeout_seconds: int = Field(default=180, description="沙箱执行超时时间（秒）")
     sandbox_max_output_bytes: int = Field(default=262144, description="沙箱最大输出字节数")
     sandbox_keepalive_interval_seconds: int = Field(default=30, description="沙箱保活间隔")
+    codeact_bridge_url: str = Field(
+        default="http://api-dev:5050", description="CodeAct 工具桥回调地址（沙盒内可达的 API 地址）"
+    )
 
     _config_file: Path | None = PrivateAttr(default=None)
     _user_modified_fields: set[str] = PrivateAttr(default_factory=set)
@@ -103,6 +106,9 @@ class Config(BaseModel):
         self.sandbox_keepalive_interval_seconds = int(
             os.getenv("SANDBOX_KEEPALIVE_INTERVAL_SECONDS") or self.sandbox_keepalive_interval_seconds or 30
         )
+        self.codeact_bridge_url = (
+            os.getenv("CODEACT_BRIDGE_URL") or self.codeact_bridge_url or "http://api-dev:5050"
+        ).strip()
 
         if self.sandbox_provider.lower() != "provisioner":
             raise ValueError("Only sandbox_provider=provisioner is supported.")
