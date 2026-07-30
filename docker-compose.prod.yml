@@ -23,6 +23,7 @@ x-api-worker-env: &api-worker-env
   SANDBOX_VIRTUAL_PATH_PREFIX: ${SANDBOX_VIRTUAL_PATH_PREFIX:-/home/gem/user-data}
   SANDBOX_EXEC_TIMEOUT_SECONDS: ${SANDBOX_EXEC_TIMEOUT_SECONDS:-180}
   SANDBOX_MAX_OUTPUT_BYTES: ${SANDBOX_MAX_OUTPUT_BYTES:-262144}
+  CODEACT_BRIDGE_URL: ${CODEACT_BRIDGE_URL:-http://api:5050}
   NO_PROXY: localhost,127.0.0.1,milvus,graph,minio,milvus-etcd,etcd,mineru,paddlex,sandbox-provisioner,api.siliconflow.cn
   no_proxy: localhost,127.0.0.1,milvus,graph,minio,milvus-etcd,etcd,mineru,paddlex,sandbox-provisioner,api.siliconflow.cn
 
