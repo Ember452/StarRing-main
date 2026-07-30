@@ -316,7 +316,7 @@ async def test_run_researcher_retries_once_on_transient_error():
     with (
         patch(f"{NODES_MODULE}._load_llm", return_value=MagicMock()),
         patch(f"{NODES_MODULE}.create_agent", return_value=fake_researcher),
-        patch(f"{NODES_MODULE}._RESEARCH_RETRY_DELAY_SECONDS", 0),
+        patch(f"{NODES_MODULE}._CHAPTER_RETRY_DELAY_SECONDS", 0),
     ):
         result = await _run_researcher(ctx, {"id": "ch-1", "heading": "背景"}, "t")
 
@@ -336,12 +336,50 @@ async def test_run_researcher_raises_after_max_attempts():
     with (
         patch(f"{NODES_MODULE}._load_llm", return_value=MagicMock()),
         patch(f"{NODES_MODULE}.create_agent", return_value=fake_researcher),
-        patch(f"{NODES_MODULE}._RESEARCH_RETRY_DELAY_SECONDS", 0),
+        patch(f"{NODES_MODULE}._CHAPTER_RETRY_DELAY_SECONDS", 0),
     ):
         with pytest.raises(RuntimeError, match="持续失败"):
             await _run_researcher(ctx, {"id": "ch-1", "heading": "背景"}, "t")
 
     assert fake_researcher.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_writer_retries_once_on_transient_error():
+    """写作首次失败后应重试一次并成功返回（避免作废整章已完成的研究成果）。"""
+    from starring.agents.buildin.deepreport.nodes import _run_writer
+
+    ctx = _make_context()
+    fake_llm = MagicMock()
+    fake_llm.ainvoke = AsyncMock(side_effect=[RuntimeError("网络抖动"), AIMessage(content="章节正文 [S1]")])
+
+    with (
+        patch(f"{NODES_MODULE}._load_llm", return_value=fake_llm),
+        patch(f"{NODES_MODULE}._CHAPTER_RETRY_DELAY_SECONDS", 0),
+    ):
+        content = await _run_writer(ctx, {"id": "ch-1", "heading": "背景", "brief": ""}, "t", [_fact("事实一")])
+
+    assert content == "章节正文 [S1]"
+    assert fake_llm.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_run_writer_raises_after_max_attempts():
+    """写作重试耗尽后应抛出最后一次错误（由 research_chapter_node 写入占位）。"""
+    from starring.agents.buildin.deepreport.nodes import _run_writer
+
+    ctx = _make_context()
+    fake_llm = MagicMock()
+    fake_llm.ainvoke = AsyncMock(side_effect=RuntimeError("持续失败"))
+
+    with (
+        patch(f"{NODES_MODULE}._load_llm", return_value=fake_llm),
+        patch(f"{NODES_MODULE}._CHAPTER_RETRY_DELAY_SECONDS", 0),
+    ):
+        with pytest.raises(RuntimeError, match="持续失败"):
+            await _run_writer(ctx, {"id": "ch-1", "heading": "背景", "brief": ""}, "t", [_fact("事实一")])
+
+    assert fake_llm.ainvoke.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -610,6 +648,37 @@ def test_snippet_fragment_picks_longest_line():
     assert _snippet_fragment("短\n这是最长的一行内容\n中等长度") == "这是最长的一行内容"
     assert _snippet_fragment("") == ""
     assert _snippet_fragment("x" * 100, max_len=30) == "x" * 30
+
+
+@pytest.mark.asyncio
+async def test_verify_source_falls_back_to_whitespace_insensitive_regex():
+    """精确匹配 miss 时降级为空白不敏感正则重试，命中则判定回验通过。"""
+    from starring.agents.buildin.deepreport.nodes import _verify_source_in_kbs
+
+    source = SubAgentSource(type="kb_chunk", file_id="f-1", snippet="知识 图谱 融合")
+    calls: list[tuple[str, bool]] = []
+
+    async def _fake_find(kb_id, file_id, patterns, *, use_regex=False, **kwargs):
+        calls.append((patterns[0], use_regex))
+        return {"total_matches": 1 if use_regex else 0}
+
+    with patch("starring.knowledge.knowledge_base.find_file_content", new=_fake_find):
+        assert await _verify_source_in_kbs(["kb-1"], source) is True
+
+    # 第一次精确匹配，第二次降级正则（字符间允许任意空白）
+    assert calls[0] == ("知识 图谱 融合", False)
+    assert calls[1][1] is True and r"\s*" in calls[1][0]
+
+
+def test_fragment_regex_strips_whitespace_and_escapes():
+    from starring.agents.buildin.deepreport.nodes import _fragment_regex
+
+    import re as _re
+
+    pattern = _fragment_regex("a.b c")
+    # 原文空白被换行打断时仍能命中，且元字符被转义
+    assert _re.search(pattern, "a.b\n c")
+    assert not _re.search(pattern, "aXb c")
 
 
 # ---------------------------------------------------------------------------

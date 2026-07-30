@@ -58,10 +58,10 @@ APPROVE_VALUE = "approve"
 CITATION_PATTERN = re.compile(r"\[S(\d+)\]")
 # 研究员子图的递归上限（章节级研究不需要太多步数）
 _RESEARCH_RECURSION_LIMIT = 50
-# 研究阶段最大尝试次数（瞬时网络/模型错误重试一次即可，避免拉长流水线时延）
-_RESEARCH_MAX_ATTEMPTS = 2
-# 研究重试间隔（秒）
-_RESEARCH_RETRY_DELAY_SECONDS = 2.0
+# 章节阶段（研究/写作）最大尝试次数（瞬时网络/模型错误重试一次即可，避免拉长流水线时延）
+_CHAPTER_MAX_ATTEMPTS = 2
+# 章节阶段重试间隔（秒）
+_CHAPTER_RETRY_DELAY_SECONDS = 2.0
 # 合成阶段每章送入 LLM 的摘要长度上限（正文由确定性拼接，LLM 只看摘要写引言/结论）
 _SYNTHESIS_SUMMARY_CHARS = 300
 # citation_check 语义回验的来源数量上限（防超长报告拖慢终检）
@@ -377,7 +377,7 @@ async def _run_researcher(context: DeepReportContext, chapter: dict[str, Any], r
         response_format=ToolStrategy(ChapterResearch),
     )
     last_error: Exception | None = None
-    for attempt in range(1, _RESEARCH_MAX_ATTEMPTS + 1):
+    for attempt in range(1, _CHAPTER_MAX_ATTEMPTS + 1):
         try:
             result = await researcher.ainvoke(
                 {"messages": [HumanMessage(content=f"请为章节「{chapter.get('heading', '')}」收集事实清单。")]},
@@ -392,13 +392,13 @@ async def _run_researcher(context: DeepReportContext, chapter: dict[str, Any], r
             raise
         except Exception as exc:
             last_error = exc
-            if attempt >= _RESEARCH_MAX_ATTEMPTS:
+            if attempt >= _CHAPTER_MAX_ATTEMPTS:
                 break
             logger.warning(
                 f"DeepReport 章节「{chapter.get('heading', '')}」研究第 {attempt} 次尝试失败，"
-                f"{_RESEARCH_RETRY_DELAY_SECONDS}s 后重试: {exc}"
+                f"{_CHAPTER_RETRY_DELAY_SECONDS}s 后重试: {exc}"
             )
-            await asyncio.sleep(_RESEARCH_RETRY_DELAY_SECONDS)
+            await asyncio.sleep(_CHAPTER_RETRY_DELAY_SECONDS)
     raise last_error if last_error is not None else ValueError("研究员执行失败")
 
 
@@ -415,20 +415,36 @@ def format_facts(facts: list) -> str:
 
 
 async def _run_writer(context: DeepReportContext, chapter: dict[str, Any], report_title: str, facts: list) -> str:
-    """写作阶段：单次纯 LLM 调用（无工具），输入仅为编号后的事实清单。"""
+    """写作阶段：纯 LLM 调用（无工具），输入仅为编号后的事实清单。
+
+    瞬时错误重试一次：写作失败会作废整章已完成的研究成果，重试收益远大于时延成本。
+    """
     writer_input = WRITER_INPUT_TEMPLATE.format(
         report_title=report_title,
         heading=chapter.get("heading", ""),
         brief=chapter.get("brief", "") or "（无）",
         facts=format_facts(facts),
     )
-    response = await _load_llm(context).ainvoke(
-        [SystemMessage(content=WRITER_PROMPT), HumanMessage(content=writer_input)]
-    )
-    content = _content_to_text(response.content).strip()
-    if not content:
-        raise ValueError("写作阶段未产出章节正文")
-    return content
+    last_error: Exception | None = None
+    for attempt in range(1, _CHAPTER_MAX_ATTEMPTS + 1):
+        try:
+            response = await _load_llm(context).ainvoke(
+                [SystemMessage(content=WRITER_PROMPT), HumanMessage(content=writer_input)]
+            )
+            content = _content_to_text(response.content).strip()
+            if not content:
+                raise ValueError("写作阶段未产出章节正文")
+            return content
+        except Exception as exc:
+            last_error = exc
+            if attempt >= _CHAPTER_MAX_ATTEMPTS:
+                break
+            logger.warning(
+                f"DeepReport 章节「{chapter.get('heading', '')}」写作第 {attempt} 次尝试失败，"
+                f"{_CHAPTER_RETRY_DELAY_SECONDS}s 后重试: {exc}"
+            )
+            await asyncio.sleep(_CHAPTER_RETRY_DELAY_SECONDS)
+    raise last_error if last_error is not None else ValueError("写作阶段执行失败")
 
 
 async def research_chapter_node(context: DeepReportContext, payload: dict[str, Any]) -> dict:
@@ -619,11 +635,20 @@ def _snippet_fragment(snippet: str, max_len: int = 30) -> str:
     return longest[:max_len]
 
 
+def _fragment_regex(fragment: str) -> str:
+    """把精确片段转成空白不敏感正则（字符间允许任意空白）。
+
+    只容忍入库规整引入的空白/换行差异，不放松字符序列本身的匹配要求。
+    """
+    return r"\s*".join(re.escape(ch) for ch in fragment if not ch.isspace())
+
+
 async def _verify_source_in_kbs(kb_ids: list[str], source: SubAgentSource) -> bool:
     """回验单条引用来源：snippet 片段能否在被引用文件原文中找到。
 
     SubAgentSource 不携带 kb_id，逐个可见知识库尝试（命中即停）；
-    单库查询异常不影响其他库的尝试。
+    精确匹配 miss 时降级为空白不敏感正则重试（容忍入库时的空白/换行规整差异，
+    减少真实引用被误标"未回验"）；单库查询异常不影响其他库的尝试。
     """
     from starring import knowledge_base
 
@@ -631,19 +656,22 @@ async def _verify_source_in_kbs(kb_ids: list[str], source: SubAgentSource) -> bo
     fragment = _snippet_fragment(source.snippet or "")
     if not file_id or not fragment:
         return False
+    patterns = [(fragment, False), (_fragment_regex(fragment), True)]
     for kb_id in kb_ids:
-        try:
-            result = await knowledge_base.find_file_content(
-                kb_id,
-                file_id,
-                [fragment],
-                use_regex=False,
-                max_windows=1,
-            )
-            if int(result.get("total_matches") or 0) > 0:
-                return True
-        except Exception:
-            continue
+        for pattern, use_regex in patterns:
+            try:
+                result = await knowledge_base.find_file_content(
+                    kb_id,
+                    file_id,
+                    [pattern],
+                    use_regex=use_regex,
+                    max_windows=1,
+                )
+                if int(result.get("total_matches") or 0) > 0:
+                    return True
+            except Exception:
+                # 该库查询异常（如文件不属于此库），换下一个库
+                break
     return False
 
 
